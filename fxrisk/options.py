@@ -1,0 +1,95 @@
+"""
+fxrisk.options
+==============
+FX option pricing via the Garman-Kohlhagen model (Black-Scholes adapted to FX).
+
+Same conventions as fxrisk.forwards:
+- Quote-per-base notation: EUR/USD = 1.08.
+- Annual SIMPLE rates here are converted to continuous compounding internally,
+  because Garman-Kohlhagen is a continuous-time model.
+- Volatility is the annualised volatility of the pair, in decimal (0.08 = 8%).
+
+Unlike a forward, an option has a PREMIUM, because it is a right, not an
+obligation. The premium is the discounted expected value of a contingent payoff
+-- conceptually, an insurance pure premium.
+
+All functions are pure.
+"""
+from __future__ import annotations
+
+import math
+
+
+def norm_cdf(x: float) -> float:
+    """
+    Standard normal cumulative distribution function N(x).
+    Uses the error function, which is exact up to floating-point precision.
+    """
+    return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
+
+
+def norm_pdf(x: float) -> float:
+    """Standard normal probability density function n(x)."""
+    return math.exp(-0.5 * x * x) / math.sqrt(2.0 * math.pi)
+
+
+def _d1_d2(spot: float, strike: float, r_base: float, r_quote: float,
+           vol: float, tau: float) -> tuple[float, float]:
+    """
+    Helper: the d1 and d2 terms of Garman-Kohlhagen.
+
+    d1 = [ln(S/K) + (r_quote - r_base + 0.5*vol^2) * tau] / (vol * sqrt(tau))
+    d2 = d1 - vol * sqrt(tau)
+    """
+    vsqrt = vol * math.sqrt(tau)
+    d1 = (math.log(spot / strike) + (r_quote - r_base + 0.5 * vol * vol) * tau) / vsqrt
+    d2 = d1 - vsqrt
+    return d1, d2
+
+
+def garman_kohlhagen(spot: float, strike: float, r_base: float, r_quote: float,
+                     vol: float, tau: float, is_call: bool = True) -> float:
+    """
+    Garman-Kohlhagen price of an FX option, per 1 unit of base currency.
+
+    call = S * exp(-r_base*tau) * N(d1) - K * exp(-r_quote*tau) * N(d2)
+    put  = K * exp(-r_quote*tau) * N(-d2) - S * exp(-r_base*tau) * N(-d1)
+
+    Multiply by the notional (in base) to get the total premium in quote currency.
+    """
+    d1, d2 = _d1_d2(spot, strike, r_base, r_quote, vol, tau)
+    disc_base = math.exp(-r_base * tau)
+    disc_quote = math.exp(-r_quote * tau)
+    if is_call:
+        return spot * disc_base * norm_cdf(d1) - strike * disc_quote * norm_cdf(d2)
+    return strike * disc_quote * norm_cdf(-d2) - spot * disc_base * norm_cdf(-d1)
+
+
+def option_delta(spot: float, strike: float, r_base: float, r_quote: float,
+                 vol: float, tau: float, is_call: bool = True) -> float:
+    """
+    Spot delta: how much the option value moves per unit move in spot.
+    For hedging, buy delta * notional of the base currency.
+
+    delta_call =  exp(-r_base*tau) * N(d1)
+    delta_put  = -exp(-r_base*tau) * N(-d1)
+    """
+    d1, _ = _d1_d2(spot, strike, r_base, r_quote, vol, tau)
+    disc_base = math.exp(-r_base * tau)
+    if is_call:
+        return disc_base * norm_cdf(d1)
+    return -disc_base * norm_cdf(-d1)
+
+
+def option_vega(spot: float, strike: float, r_base: float, r_quote: float,
+                vol: float, tau: float) -> float:
+    """
+    Vega: sensitivity of the premium to volatility, per 1.00 (100 vol points)
+    change in volatility. Divide by 100 for the change per 1 vol point.
+
+    vega = S * exp(-r_base*tau) * sqrt(tau) * n(d1)
+
+    Vega is the same for calls and puts.
+    """
+    d1, _ = _d1_d2(spot, strike, r_base, r_quote, vol, tau)
+    return spot * math.exp(-r_base * tau) * math.sqrt(tau) * norm_pdf(d1)
