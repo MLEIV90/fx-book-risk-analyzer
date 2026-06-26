@@ -4,8 +4,8 @@ fxrisk.curves
 Real interest-rate curves per currency, from official free sources.
 
 Sources, per currency:
-- USD: FRED Treasury constant-maturity points (1M, 3M, 6M, 1Y). Daily, full curve.
-- EUR: ECB yield curve (AAA euro-area government spot rates) at 3M, 6M, 9M, 1Y.
+- USD: FRED Treasury constant-maturity points (3M, 6M, 1Y, 2Y). Daily, full curve.
+- EUR: ECB yield curve (AAA euro-area government spot rates) at 3M, 6M, 1Y, 2Y.
        Daily, full curve, from the ECB Data Portal.
 - GBP, JPY, CHF, CAD, AUD: FRED 3-month interbank reference rate (single point,
        monthly) -> treated as a flat curve and SAID SO. A full curve for these

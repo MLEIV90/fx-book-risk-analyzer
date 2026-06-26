@@ -105,3 +105,14 @@ def test_stressed_var_exceeds_normal():
     res = stressed_var(ret, POS, 0.99, window=250)
     assert res["stressed_var"] >= res["normal_var"]
     assert res["ratio"] >= 1.0
+
+
+def test_factor_positions_rejects_non_usd_quote():
+    """The numeraire guard must reject a non-USD-quoted pair, not sum silently."""
+    import pytest
+    from fxrisk.book import Position, Book
+    from fxrisk.portfolio_risk import _factor_positions
+    book = Book([Position("EUR/JPY", True, 1_000_000, 90, 160.0, id="x1")])
+    spots = {"EUR/JPY": 160.0}
+    with pytest.raises(ValueError, match="quote-USD"):
+        _factor_positions(book, spots)

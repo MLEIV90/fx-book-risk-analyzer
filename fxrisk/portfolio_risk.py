@@ -81,6 +81,19 @@ def _factor_positions(book, spots: dict[str, float]) -> tuple[list[str], np.ndar
     Positions on the same pair are netted. `spots` provides the current spot per
     pair. Returns (ordered pairs, positions vector aligned to those pairs).
     """
+    # All pair exposures are summed in quote-currency terms into one covariance
+    # and one VaR. That is only valid when every pair shares the same quote
+    # currency (USD here). A non-USD-quoted pair (e.g. EUR/JPY) would mix P&L in
+    # different currencies without conversion, silently corrupting the VaR. We
+    # fail loudly rather than return a wrong number -- supporting mixed quote
+    # currencies would require converting each leg to a common numeraire first.
+    non_usd = sorted({p.pair for p in book if p.quote_ccy != "USD"})
+    if non_usd:
+        raise ValueError(
+            "Portfolio VaR currently assumes all pairs are quote-USD; found "
+            f"non-USD-quoted pair(s): {', '.join(non_usd)}. Converting each pair's "
+            "P&L to a common numeraire is out of scope in this version.")
+
     exposure: dict[str, float] = {}
     for p in book:
         sign = 1.0 if p.long_base else -1.0
@@ -113,6 +126,10 @@ def portfolio_var(returns: np.ndarray, positions: np.ndarray,
 
     # Risk attribution via the covariance: contribution of each factor to the
     # portfolio variance (component contributions sum to total variance).
+    # Note: this attribution is variance-based (it assumes the parametric/normal
+    # view), while the headline VaR may be the historical one. The two agree
+    # exactly only under normality; the attribution is read as an approximate
+    # decomposition of where the risk concentrates.
     cov = np.cov(returns, rowvar=False)
     cov = np.atleast_2d(cov)                         # 1 factor -> 1x1, not scalar
     port_var = float(positions @ cov @ positions)

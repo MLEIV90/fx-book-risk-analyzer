@@ -26,6 +26,15 @@ def factor_setup(book, snapshots: dict, history_period: str = "2y"):
     - positions: (n_pairs,) net spot exposure in quote currency per pair.
     """
     pairs = book.pairs()
+
+    # Same numeraire guard as portfolio_risk: all pairs must be quote-USD, or the
+    # returns and exposures would be summed across currencies without conversion.
+    non_usd = sorted({p.pair for p in book if p.quote_ccy != "USD"})
+    if non_usd:
+        raise ValueError(
+            "Portfolio VaR currently assumes all pairs are quote-USD; found "
+            f"non-USD-quoted pair(s): {', '.join(non_usd)}.")
+
     prices = fetch_spot_history(pairs, period=history_period)
     rets_df = to_returns(prices)
     returns = rets_df[pairs].to_numpy()

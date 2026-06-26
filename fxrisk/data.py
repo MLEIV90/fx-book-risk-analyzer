@@ -33,7 +33,7 @@ class MarketDataError(RuntimeError):
 
 
 def fetch_spot_history(pairs: list[str] | None = None,
-                       period: str = "1y") -> pd.DataFrame:
+                       period: str = "2y") -> pd.DataFrame:
     """
     Download daily spot history for the given pairs.
 

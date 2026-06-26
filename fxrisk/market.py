@@ -72,7 +72,7 @@ def get_market_snapshot(pair: str, tenor_days: int,
     # 2. Rates per currency from FRED, at this tenor.
     r_base, curve_b = rate_for_tenor(base_ccy, tenor_years)
     r_quote, curve_q = rate_for_tenor(quote_ccy, tenor_years)
-    sources["rates"] = f"FRED ({', '.join(curve_b.sources + curve_q.sources)})"
+    sources["rates"] = f"Rate curves ({', '.join(curve_b.sources + curve_q.sources)})"
     if curve_b.notes:
         notes.append(f"{base_ccy}: {curve_b.notes}")
     if curve_q.notes:
