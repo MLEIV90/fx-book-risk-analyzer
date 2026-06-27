@@ -22,6 +22,7 @@ from fxrisk.market import get_market_snapshot, MarketSnapshot
 from fxrisk.forwards import client_rate_with_spread
 from fxrisk.options import (garman_kohlhagen, option_delta, option_gamma,
                             option_vega, option_theta)
+from fxrisk.option_book import OptionPosition, OptionBook, option_book_greeks
 from fxrisk.book import Position, Book
 from fxrisk.data import MarketDataError
 from fxrisk.book_analytics import value_book, book_sensitivity
@@ -143,6 +144,9 @@ def _plotly_layout(fig, height=300):
 if "book" not in st.session_state:
     st.session_state.book = Book()
 book: Book = st.session_state.book
+if "option_book" not in st.session_state:
+    st.session_state.option_book = OptionBook()
+option_book: OptionBook = st.session_state.option_book
 
 SUPPORTED = supported_currencies()
 PAIRS = [f"{b}/USD" for b in ("EUR", "GBP") if b in SUPPORTED]
@@ -526,9 +530,74 @@ with sub_opt:
             fig_g.update_yaxes(title_text="Delta")
             st.plotly_chart(_plotly_layout(fig_g), use_container_width=True,
                             config={"displayModeBar": False})
+
+        # ---- add to the (separate) option book ----
+        st.divider()
+        if st.button("Add to option book", key="opt_add_btn"):
+            option_book.add(OptionPosition(
+                pair=opair, is_call=is_call, notional_base=float(onotional),
+                strike=float(strike), tenor_days=int(tau * 365), vol=float(vol),
+                premium_unit=float(premium_unit),
+                label=f"{otype} {opair} @ {strike:.4f}"))
+            st.success(f"Added to option book: {otype} {onotional:,.0f} {obase} "
+                       f"@ {strike:.4f}.")
     else:
         st.caption("Choose the option's terms and click **Price option** to see its "
                    "premium, Greeks and payoff.")
+
+    # ---- the option book, managed by aggregate greeks ----
+    st.divider()
+    st.markdown("##### Option book (managed by aggregate greeks)")
+    st.markdown(
+        '<div class="interp">Options are kept in their <b>own book</b>, separate '
+        'from the forward book. An option book is managed by its <b>greek '
+        'profile</b> (net delta, gamma, vega, theta), not by a linear VaR — a '
+        'covariance VaR would misstate non-linear risk. A full-revaluation option '
+        'VaR is the correct next step and is documented as future work.</div>',
+        unsafe_allow_html=True)
+
+    if option_book.is_empty:
+        st.caption("The option book is empty. Price an option above and click "
+                   "**Add to option book**.")
+    else:
+        try:
+            with st.spinner("Valuing option book at live rates..."):
+                ob_spots, ob_rates = {}, {}
+                for pr in option_book.pairs():
+                    s = get_market_snapshot(pr, 90)
+                    ob_spots[pr] = s.spot
+                    ob_rates[pr] = (s.r_base, s.r_quote)
+                greeks = option_book_greeks(option_book, ob_spots, ob_rates)
+            tot = greeks["totals"]
+            cards([
+                {"label": "Book value", "value": f"{tot['value']:,.0f}",
+                 "sub": "sum of option values", "kind": "accent"},
+                {"label": "Net delta", "value": f"{tot['delta']:,.0f}",
+                 "sub": "base-ccy directional exposure"},
+                {"label": "Net gamma", "value": f"{tot['gamma']:,.0f}"},
+                {"label": "Net vega", "value": f"{tot['vega']/100:,.0f}",
+                 "sub": "per 1 vol point"},
+                {"label": "Net theta/day", "value": f"{tot['theta']:,.0f}",
+                 "sub": "daily time decay", "kind": "warn"},
+            ])
+            rows = [{
+                "Pair": r["pair"], "Type": r["kind"], "Strike": f"{r['strike']:.4f}",
+                "Notional": f"{r['notional']:,.0f}", "Value": f"{r['value']:,.0f}",
+                "Delta": f"{r['delta']:,.0f}", "Gamma": f"{r['gamma']:,.0f}",
+                "Vega": f"{r['vega']/100:,.0f}", "Theta/day": f"{r['theta']:,.0f}",
+            } for r in greeks["positions"]]
+            st.dataframe(rows, use_container_width=True, hide_index=True)
+            if st.button("Clear option book", key="opt_clear_btn"):
+                option_book.clear()
+                st.rerun()
+            st.caption("Net delta is the directional FX exposure (hedge it with a "
+                       "spot/forward). Net gamma shows how fast that delta moves. "
+                       "Net vega is exposure to volatility. Net theta is the daily "
+                       "bleed from time decay.")
+        except MarketDataError:
+            st.error("Live market data unavailable to value the option book.")
+        except Exception as exc:
+            st.error(f"Could not value the option book: {exc}")
 
 # ============================ 1. BOOK =====================================
 with tab_book:
