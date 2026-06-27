@@ -181,10 +181,20 @@ def expected_shortfall(returns: np.ndarray, positions: np.ndarray,
     """
     Expected Shortfall (ES): the AVERAGE loss in the worst tail beyond the VaR.
     Tells you how deep the bad day is, not just where it starts.
+
+    Stability note: at high confidence the tail may contain very few points
+    (e.g. ~1% of N). With fewer than ~10 tail observations the ES is unstable;
+    a warning is emitted so the caller knows the estimate is noisy.
     """
+    import warnings
     pnl = _pnl_vector(returns, positions)
     cutoff = np.percentile(pnl, (1.0 - confidence) * 100.0)
     tail = pnl[pnl <= cutoff]
+    if len(tail) < 10:
+        warnings.warn(
+            f"Expected Shortfall tail has only {len(tail)} observation(s) at "
+            f"{confidence:.0%} confidence; the estimate is statistically unstable. "
+            f"Use a longer history or a lower confidence.", stacklevel=2)
     return -tail.mean()
 
 
@@ -245,18 +255,21 @@ def simulate_liquidity_need(notional_quote: float, daily_vol: float,
 # the windows shown.
 STRESS_SCENARIO_SOURCES: dict[str, str] = {
     "Brexit referendum (Jun 2016)":
-        "EUR/USD and GBP/USD spot move, 23-27 Jun 2016 (referendum result).",
+        "EUR/USD and GBP/USD spot move, 23-27 Jun 2016 (referendum result). "
+        "GBP/USD fell ~8% from ~1.50 to ~1.37.",
     "COVID crash (Mar 2020)":
-        "Spot move during the 9-23 Mar 2020 liquidity crisis.",
-    "SNB de-peg (Jan 2015)":
-        "Spot move around the 15 Jan 2015 removal of the EUR/CHF floor "
-        "(EUR/USD and GBP/USD spillover; the CHF move itself is far larger).",
+        "Spot move during the 9-23 Mar 2020 liquidity crisis. GBP/USD fell "
+        "~10-11% to a multi-decade low; EUR/USD ~3-4%.",
+    "SNB de-peg spillover (Jan 2015)":
+        "15 Jan 2015 removal of the EUR/CHF floor. The large move was in CHF "
+        "pairs; the figures here are the SPILLOVER into EUR/USD and GBP/USD, "
+        "which was modest (~1-2%). A CHF pair would show the full shock.",
 }
 
 STRESS_SCENARIOS: dict[str, dict[str, float]] = {
-    "Brexit referendum (Jun 2016)": {"EUR/USD": -0.02, "GBP/USD": -0.08},
-    "COVID crash (Mar 2020)":       {"EUR/USD": -0.03, "GBP/USD": -0.06},
-    "SNB de-peg (Jan 2015)":        {"EUR/USD": -0.02, "GBP/USD": -0.03},
+    "Brexit referendum (Jun 2016)":   {"EUR/USD": -0.02, "GBP/USD": -0.08},
+    "COVID crash (Mar 2020)":         {"EUR/USD": -0.035, "GBP/USD": -0.10},
+    "SNB de-peg spillover (Jan 2015)": {"EUR/USD": -0.02, "GBP/USD": -0.015},
 }
 
 

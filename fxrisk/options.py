@@ -47,6 +47,18 @@ def _d1_d2(spot: float, strike: float, r_base: float, r_quote: float,
     return d1, d2
 
 
+def _to_continuous(r_simple: float, tau: float) -> float:
+    """
+    Convert an annual SIMPLE rate to its continuously-compounded equivalent for
+    the given tenor: r_c = ln(1 + r_simple * tau) / tau.
+
+    Garman-Kohlhagen is a continuous-time model, while the curves (and forwards)
+    use simple rates. Converting here keeps the option consistent with the rest
+    of the engine and with this module's stated convention.
+    """
+    return math.log(1.0 + r_simple * tau) / tau
+
+
 def garman_kohlhagen(spot: float, strike: float, r_base: float, r_quote: float,
                      vol: float, tau: float, is_call: bool = True) -> float:
     """
@@ -55,11 +67,15 @@ def garman_kohlhagen(spot: float, strike: float, r_base: float, r_quote: float,
     call = S * exp(-r_base*tau) * N(d1) - K * exp(-r_quote*tau) * N(d2)
     put  = K * exp(-r_quote*tau) * N(-d2) - S * exp(-r_base*tau) * N(-d1)
 
-    Multiply by the notional (in base) to get the total premium in quote currency.
+    Input rates are annual SIMPLE rates (as elsewhere in the engine); they are
+    converted to continuous compounding internally. Multiply by the notional
+    (in base) to get the total premium in quote currency.
     """
-    d1, d2 = _d1_d2(spot, strike, r_base, r_quote, vol, tau)
-    disc_base = math.exp(-r_base * tau)
-    disc_quote = math.exp(-r_quote * tau)
+    rb_c = _to_continuous(r_base, tau)
+    rq_c = _to_continuous(r_quote, tau)
+    d1, d2 = _d1_d2(spot, strike, rb_c, rq_c, vol, tau)
+    disc_base = math.exp(-rb_c * tau)
+    disc_quote = math.exp(-rq_c * tau)
     if is_call:
         return spot * disc_base * norm_cdf(d1) - strike * disc_quote * norm_cdf(d2)
     return strike * disc_quote * norm_cdf(-d2) - spot * disc_base * norm_cdf(-d1)
@@ -74,8 +90,9 @@ def option_delta(spot: float, strike: float, r_base: float, r_quote: float,
     delta_call =  exp(-r_base*tau) * N(d1)
     delta_put  = -exp(-r_base*tau) * N(-d1)
     """
-    d1, _ = _d1_d2(spot, strike, r_base, r_quote, vol, tau)
-    disc_base = math.exp(-r_base * tau)
+    d1, _ = _d1_d2(spot, strike, _to_continuous(r_base, tau),
+                   _to_continuous(r_quote, tau), vol, tau)
+    disc_base = math.exp(-_to_continuous(r_base, tau) * tau)
     if is_call:
         return disc_base * norm_cdf(d1)
     return -disc_base * norm_cdf(-d1)
@@ -91,5 +108,6 @@ def option_vega(spot: float, strike: float, r_base: float, r_quote: float,
 
     Vega is the same for calls and puts.
     """
-    d1, _ = _d1_d2(spot, strike, r_base, r_quote, vol, tau)
-    return spot * math.exp(-r_base * tau) * math.sqrt(tau) * norm_pdf(d1)
+    d1, _ = _d1_d2(spot, strike, _to_continuous(r_base, tau),
+                   _to_continuous(r_quote, tau), vol, tau)
+    return spot * math.exp(-_to_continuous(r_base, tau) * tau) * math.sqrt(tau) * norm_pdf(d1)

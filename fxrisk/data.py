@@ -47,11 +47,29 @@ def fetch_spot_history(pairs: list[str] | None = None,
         import yfinance as yf
 
         tickers = [DEFAULT_TICKERS[p] for p in pairs]
-        raw = yf.download(tickers, period=period, progress=False)["Close"]
-        if raw is None or raw.empty:
+        close = yf.download(tickers, period=period, progress=False)["Close"]
+        if close is None or len(close) == 0:
             raise MarketDataError("Live market data is currently unavailable.")
-        raw.columns = pairs
-        return raw.dropna()
+
+        # yfinance returns a different shape for one ticker vs many:
+        # - many tickers -> DataFrame with one column per ticker
+        # - one ticker   -> a Series (or single-column frame) without our labels
+        # Normalise to a DataFrame whose columns are the requested pairs, in order.
+        if isinstance(close, pd.Series):
+            raw = close.to_frame()
+            raw.columns = pairs
+        elif len(pairs) == 1:
+            raw = close.iloc[:, [0]].copy()
+            raw.columns = pairs
+        else:
+            # Reorder columns to match the requested pair order, then relabel.
+            raw = close[tickers].copy()
+            raw.columns = pairs
+
+        raw = raw.dropna()
+        if raw.empty:
+            raise MarketDataError("Live market data is currently unavailable.")
+        return raw
     except MarketDataError:
         raise
     except Exception as exc:  # network down, API change, bad ticker, etc.

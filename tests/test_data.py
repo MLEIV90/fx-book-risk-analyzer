@@ -38,3 +38,15 @@ def test_rolling_correlation_runs():
     rc = rolling_correlation(to_returns(prices), "EUR/USD", "GBP/USD", window=60)
     assert len(rc) > 0
     assert (rc.abs() <= 1.0 + 1e-9).all()
+
+def test_to_returns_single_pair_shape():
+    """
+    H6: returns from a single-pair price frame must keep one column, not collapse.
+    Guards the single-pair path that previously mismatched columns.
+    """
+    from fxrisk.data import synthetic_spot_history, to_returns
+    prices = synthetic_spot_history(["EUR/USD"], n_days=300)
+    assert prices.shape[1] == 1
+    rets = to_returns(prices)
+    assert rets.shape[1] == 1
+    assert list(rets.columns) == ["EUR/USD"]

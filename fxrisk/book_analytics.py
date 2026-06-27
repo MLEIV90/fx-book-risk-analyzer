@@ -53,6 +53,12 @@ def value_position_from_snapshot(position: Position,
     """
     Pure valuation: given a position and a market snapshot, compute its MtM.
     Separated from the fetch so it can be unit-tested without the network.
+
+    Time convention (declared): the snapshot is built with the position's
+    ORIGINAL tenor, so the book is valued as a snapshot taken AT BOOKING -- the
+    model does not age positions (no theta / passage of time since the trade
+    date). This is appropriate for the tool's use (a book defined 'as of today')
+    but means it is a static picture, not a day-by-day re-aging of each trade.
     """
     market_fwd = snapshot.forward()
     mtm = forward_mtm(

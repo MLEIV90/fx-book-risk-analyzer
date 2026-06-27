@@ -63,7 +63,16 @@ class RateCurve:
     sources: list[str] = field(default_factory=list)
 
     def rate_at(self, tenor_years: float) -> float:
-        """Linearly interpolate (and flat-extrapolate) the rate at a tenor."""
+        """
+        Linearly interpolate the rate at a tenor.
+
+        Outside the anchor range the rate is held FLAT (np.interp clamps to the
+        nearest endpoint): a tenor below the first point (3M) uses the 3M rate,
+        and a tenor beyond the last point (2Y) uses the 2Y rate. This is a
+        declared simplification -- the short and long ends are not extrapolated,
+        only held flat. It mainly affects positions with under ~90 days
+        remaining, which then use the 3M rate.
+        """
         if len(self.tenors) == 1:
             return float(self.rates[0])
         return float(np.interp(tenor_years, self.tenors, self.rates))

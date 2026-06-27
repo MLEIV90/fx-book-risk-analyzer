@@ -141,7 +141,7 @@ def portfolio_var(returns: np.ndarray, positions: np.ndarray,
     # Standalone VaR per factor and diversification benefit.
     from scipy.stats import norm
     z = norm.ppf(confidence)
-    sigma = returns.std(axis=0)
+    sigma = returns.std(axis=0, ddof=1)   # ddof=1 to match np.cov (consistency)
     standalone = {factors[i]: float(z * abs(positions[i]) * sigma[i])
                   for i in range(len(factors))}
     sum_standalone = sum(standalone.values()) or 1.0
