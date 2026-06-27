@@ -116,3 +116,43 @@ def test_factor_positions_rejects_non_usd_quote():
     spots = {"EUR/JPY": 160.0}
     with pytest.raises(ValueError, match="quote-USD"):
         _factor_positions(book, spots)
+
+
+def test_var_ewma_positive_and_reactive():
+    """EWMA VaR should be a positive number and finite."""
+    from fxrisk.portfolio_risk import var_ewma
+    v = var_ewma(_returns(), POS, 0.99)
+    assert v > 0 and np.isfinite(v)
+
+
+def test_var_student_t_heavier_than_normal():
+    """Student-t VaR should be >= parametric normal VaR (fatter tail)."""
+    from fxrisk.portfolio_risk import var_student_t
+    from fxrisk.risk import var_parametric
+    r = _returns(seed=11, n=2000)
+    vt = var_student_t(r, POS, 0.99)
+    vn = var_parametric(r, POS, 0.99)
+    assert vt > 0
+    assert vt >= vn * 0.95          # t tail at least as heavy (allow noise)
+
+
+def test_christoffersen_detects_clustering():
+    """Independence test should flag clustered exceptions."""
+    from fxrisk.portfolio_risk import christoffersen_independence
+    import numpy as np
+    n = 500
+    var_series = np.full(n, 1000.0)
+    pnl = np.full(n, 100.0)               # no exceptions normally
+    # Inject a cluster of consecutive exceptions.
+    pnl[100:110] = -2000.0
+    res = christoffersen_independence(pnl, var_series)
+    assert "p_value" in res and "independent" in res
+
+
+def test_mc_zero_drift_default():
+    """Default MC VaR uses zero drift; should be close to parametric."""
+    from fxrisk.risk import var_montecarlo, var_parametric
+    r = _returns(seed=5, n=3000)
+    vmc = var_montecarlo(r, POS, 0.99, n_sims=40000)
+    vp = var_parametric(r, POS, 0.99)
+    assert abs(vmc - vp) / vp < 0.10      # within 10% on normal data

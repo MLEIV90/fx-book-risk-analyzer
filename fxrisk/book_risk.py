@@ -114,3 +114,32 @@ def stress_book(book, snapshots: dict, var_reference: float) -> dict:
         ratio = abs(pnl) / var_reference if var_reference > 0 else float("nan")
         results[name] = {"pnl": pnl, "x_var": ratio}
     return results
+
+
+def dv01_book_by_tenor(book, snapshots: dict) -> dict:
+    """
+    B4: key-rate DV01 -- DV01 grouped by tenor bucket, not just by currency.
+
+    A single parallel-bump DV01 hides WHERE on the curve the rate risk sits. A
+    book of mostly 90-day forwards has its risk at the short end; a book with
+    2-year forwards at the long end. Bucketing the per-position DV01 by tenor
+    shows the curve exposure profile -- the input a desk needs to hedge with the
+    right instruments. Buckets: 0-3m, 3-6m, 6-12m, 12m+.
+    """
+    buckets = {"0-3m": 0.0, "3-6m": 0.0, "6-12m": 0.0, "12m+": 0.0}
+    for p in book:
+        snap = snapshots[p.id]
+        dv = dv01_forward(p.notional_base, p.strike, snap.spot,
+                          snap.r_base, snap.r_quote, snap.tenor_years)
+        sign = 1.0 if p.long_base else -1.0
+        total_dv = sign * dv["dv01_net"]
+        d = p.tenor_days
+        if d <= 90:
+            buckets["0-3m"] += total_dv
+        elif d <= 180:
+            buckets["3-6m"] += total_dv
+        elif d <= 365:
+            buckets["6-12m"] += total_dv
+        else:
+            buckets["12m+"] += total_dv
+    return buckets

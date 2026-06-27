@@ -57,3 +57,14 @@ def test_stress_zero_move_for_uncovered_pair():
     results = stress_book(book, snaps, var_reference=50_000.0)
     for r in results.values():
         assert r["pnl"] == 0.0
+
+
+def test_dv01_by_tenor_buckets():
+    """Key-rate DV01 should bucket positions by tenor and sum to the net total."""
+    from fxrisk.book_risk import dv01_book_by_tenor, dv01_book
+    book, snaps = _book_and_snaps()
+    buckets = dv01_book_by_tenor(book, snaps)
+    assert set(buckets) == {"0-3m", "3-6m", "6-12m", "12m+"}
+    # Sum of buckets should equal the net total DV01 across the book.
+    _, total = dv01_book(book, snaps)
+    assert abs(sum(buckets.values()) - total) < 1e-6

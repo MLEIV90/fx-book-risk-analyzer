@@ -287,3 +287,91 @@ def stressed_var(returns: np.ndarray, positions: np.ndarray,
     normal = var_historical(returns, positions, confidence)
     ratio = stressed / normal if normal > 0 else float("nan")
     return {"stressed_var": stressed, "normal_var": normal, "ratio": ratio}
+
+
+def var_ewma(returns: np.ndarray, positions: np.ndarray,
+             confidence: float = 0.99, lam: float = 0.94) -> float:
+    """
+    B2: parametric VaR using an EWMA (RiskMetrics) covariance.
+
+    A plain sample covariance weights a two-year-old day the same as yesterday.
+    EWMA weights recent observations more (decay lambda, 0.94 is the RiskMetrics
+    daily standard), so the VaR reacts faster to the current regime.
+    """
+    from scipy.stats import norm
+    returns = np.asarray(returns, dtype=float)
+    if returns.ndim == 1:
+        returns = returns.reshape(-1, 1)
+    n = returns.shape[0]
+    weights = lam ** np.arange(n - 1, -1, -1)            # most recent = highest
+    weights /= weights.sum()
+    demeaned = returns - np.average(returns, axis=0, weights=weights)
+    cov = (demeaned * weights[:, None]).T @ demeaned     # weighted covariance
+    cov = np.atleast_2d(cov)
+    port_sd = np.sqrt(float(positions @ cov @ positions))
+    return norm.ppf(confidence) * port_sd
+
+
+def var_student_t(returns: np.ndarray, positions: np.ndarray,
+                  confidence: float = 0.99) -> float:
+    """
+    B1: parametric VaR with a Student-t quantile to capture fat tails.
+
+    The normal VaR underestimates extreme losses because FX returns are
+    fat-tailed. This fits the degrees of freedom of the portfolio P&L and uses
+    the t-quantile instead of the normal z-score, giving a heavier tail.
+    """
+    from scipy.stats import t as student_t
+    pnl = (np.asarray(returns, dtype=float).reshape(len(returns), -1) @ positions)
+    mu, sigma = float(np.mean(pnl)), float(np.std(pnl, ddof=1))
+    # Fit degrees of freedom; guard against too-few points.
+    try:
+        nu, _, _ = student_t.fit(pnl, floc=mu, fscale=sigma)
+        nu = max(nu, 3.0)                                # keep variance finite
+    except Exception:
+        nu = 5.0
+    q = student_t.ppf(1.0 - confidence, df=nu)           # negative tail quantile
+    return -(mu + sigma * q)
+
+
+def christoffersen_independence(pnl: np.ndarray, var_series: np.ndarray
+                                ) -> dict[str, float]:
+    """
+    B5: Christoffersen test of INDEPENDENCE of VaR exceptions.
+
+    Kupiec checks how MANY exceptions occur; Christoffersen checks whether they
+    CLUSTER (an exception today making one tomorrow more likely), which signals a
+    model that does not react to changing risk. Tests the transition
+    probabilities of the exception indicator with a likelihood-ratio statistic.
+    Returns the LR statistic, its p-value (chi-square, 1 df), and whether
+    independence is NOT rejected (p > 0.05 = good, no clustering).
+    """
+    from scipy.stats import chi2
+    pnl = np.asarray(pnl, dtype=float)
+    var_series = np.asarray(var_series, dtype=float)
+    hits = (-pnl > var_series).astype(int)              # 1 = exception
+
+    # Count transitions between consecutive days.
+    n00 = n01 = n10 = n11 = 0
+    for prev, cur in zip(hits[:-1], hits[1:]):
+        if prev == 0 and cur == 0: n00 += 1
+        elif prev == 0 and cur == 1: n01 += 1
+        elif prev == 1 and cur == 0: n10 += 1
+        else: n11 += 1
+
+    pi01 = n01 / (n00 + n01) if (n00 + n01) > 0 else 0.0
+    pi11 = n11 / (n10 + n11) if (n10 + n11) > 0 else 0.0
+    pi = (n01 + n11) / (n00 + n01 + n10 + n11)
+
+    # Likelihood ratio for independence.
+    def _safe_log(x): return np.log(x) if x > 0 else 0.0
+    ll_uncond = (n00 + n10) * _safe_log(1 - pi) + (n01 + n11) * _safe_log(pi)
+    ll_cond = (n00 * _safe_log(1 - pi01) + n01 * _safe_log(pi01)
+               + n10 * _safe_log(1 - pi11) + n11 * _safe_log(pi11))
+    lr = -2.0 * (ll_uncond - ll_cond)
+    p_value = float(1.0 - chi2.cdf(lr, df=1))
+    return {
+        "lr_statistic": float(lr), "p_value": p_value,
+        "independent": bool(p_value > 0.05),
+        "clustering_ratio_pi11_vs_pi01": float(pi11 / pi01) if pi01 > 0 else float("nan"),
+    }

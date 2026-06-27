@@ -61,7 +61,10 @@ def test_es_greater_than_var():
 # ----- Liquidity -----
 def test_liquidity_returns_two_keys():
     out = simulate_liquidity_need(1_000_000, 0.005, horizon_days=60, n_sims=2000)
-    assert set(out) == {"liquidity_buffer", "avg_worst_drawdown"}
+    assert {"liquidity_buffer", "avg_worst_drawdown", "stressed_buffer",
+            "stress_multiplier"} <= set(out)
+    # The stressed buffer must exceed the base buffer (higher vol -> more cash).
+    assert out["stressed_buffer"] > out["liquidity_buffer"]
 
 
 def test_liquidity_buffer_positive_and_largest():

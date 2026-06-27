@@ -84,7 +84,9 @@ def synthetic_spot_history(pairs: list[str], n_days: int = 252,
 
     start = np.array([1.08, 1.27])[:n] if n <= 2 else np.full(n, 1.10)
     prices = start * np.exp(np.cumsum(daily_returns, axis=0))
-    idx = pd.date_range(end=pd.Timestamp.today(), periods=n_days, freq="B")
+    # Build a date index that always matches the number of rows exactly.
+    n_rows = prices.shape[0]
+    idx = pd.bdate_range(start="2020-01-01", periods=n_rows)
     return pd.DataFrame(prices, columns=pairs, index=idx)
 
 

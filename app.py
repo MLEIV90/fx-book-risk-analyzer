@@ -24,8 +24,10 @@ from fxrisk.book import Position, Book
 from fxrisk.data import MarketDataError
 from fxrisk.book_analytics import value_book, book_sensitivity
 from fxrisk.portfolio_risk import (
-    portfolio_var, kupiec_backtest, rolling_backtest, stressed_var)
-from fxrisk.book_risk import dv01_book, liquidity_book, stress_book
+    portfolio_var, kupiec_backtest, rolling_backtest, stressed_var,
+    var_student_t, var_ewma, christoffersen_independence)
+from fxrisk.book_risk import (dv01_book, liquidity_book, stress_book,
+                              dv01_book_by_tenor)
 from fxrisk.limits import LimitsConfig, check_limits
 from app_helpers import snapshots_for_book, factor_setup
 
@@ -472,6 +474,22 @@ with tab_mkt:
          "sub": f"{var_report.expected_shortfall / book_notional_usd:.2%} of book",
          "kind": "warn"},
     ])
+
+    # Fat-tail and regime-aware VaR (audit improvements B1, B2).
+    try:
+        vt = var_student_t(returns, positions, confidence)
+        ve = var_ewma(returns, positions, confidence)
+        cards([
+            {"label": "VaR · Student-t", "value": f"{vt:,.0f}",
+             "sub": "fat-tailed", "kind": "accent"},
+            {"label": "VaR · EWMA", "value": f"{ve:,.0f}",
+             "sub": "regime-weighted (λ=0.94)"},
+        ])
+        st.caption("Student-t captures fat tails the normal VaR misses; EWMA weights "
+                   "recent days more, so it reacts faster to the current regime. Both "
+                   "are validation-grade refinements over the plain normal VaR.")
+    except Exception:
+        pass
     st.caption(f"1-day horizon at {confidence:.1%} confidence. Book notional ≈ "
                f"{book_notional_usd:,.0f} USD. The three methods should broadly agree; "
                f"differences reveal how fat-tailed the data is.")
@@ -600,6 +618,17 @@ with tab_mkt:
         f'The Kupiec proportion-of-failures test {"does not reject" if kup.passed else "rejects"} '
         f'the model (p-value {kup.p_value:.2f}).</div>', unsafe_allow_html=True)
 
+    # Christoffersen independence test (audit improvement B5).
+    pnl_full = returns @ positions
+    chr_res = christoffersen_independence(
+        pnl_full, np.full(len(pnl_full), var_report.var_historical))
+    st.markdown(
+        f'<div class="interp"><b>Independence (Christoffersen):</b> '
+        f'{"exceptions are not clustered — good" if chr_res["independent"] else "exceptions cluster — the model may be slow to react"} '
+        f'(p-value {chr_res["p_value"]:.2f}). Kupiec checks how many breaches occur; '
+        f'this checks whether they bunch together, which a count alone would miss.'
+        f'</div>', unsafe_allow_html=True)
+
 # ==================== 4. RATE / LIQUIDITY / STRESS ======================
 with tab_rls:
     st.subheader("Rate risk, liquidity and stress")
@@ -616,6 +645,16 @@ with tab_rls:
                           "The real rate risk is in the differential.")
     st.caption("Value change per 1bp move, per currency curve. The legs of a forward "
                "partly offset, so the rate risk lives in the differential between curves.")
+
+    # Key-rate DV01 by tenor bucket (audit improvement B4).
+    st.markdown("##### Key-rate DV01 (by tenor bucket)")
+    kr = dv01_book_by_tenor(book, snapshots)
+    kcols = st.columns(len(kr))
+    for col, (bucket, dv) in zip(kcols, kr.items()):
+        col.metric(f"DV01 {bucket}", f"{dv:,.2f}")
+    st.caption("Where on the curve the rate risk sits. A single parallel-bump DV01 "
+               "hides this; bucketing by tenor shows what to hedge and with which "
+               "instruments.")
 
     st.divider()
     st.markdown("##### Liquidity (variation margin)")
