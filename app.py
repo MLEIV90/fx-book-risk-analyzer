@@ -206,43 +206,13 @@ st.write("")
 # Sidebar: trade entry + limits
 # --------------------------------------------------------------------------
 with st.sidebar:
-    st.header("New trade")
-    st.caption("Define the client's trade. The provider books the mirror position.")
+    st.header("Book actions")
+    st.caption("Load a sample book or clear it. Build individual trades in the "
+               "Instruments → Forward tab.")
     if not PAIRS:
         st.error("No supported pairs available.")
         st.stop()
-    pair = st.selectbox("Currency pair", PAIRS,
-                        help="Pairs with real rate curves available (EUR & USD full "
-                             "curve; GBP 3-month point).")
-    base_ccy, quote_ccy = pair.split("/")
-    client_side = st.radio("Client wants to", [f"Buy {base_ccy}", f"Sell {base_ccy}"],
-                           help="An importer buys the base currency; an exporter sells it.")
-    client_buys_base = client_side.startswith("Buy")
-    notional = st.number_input(f"Notional ({base_ccy})", value=1_000_000, step=100_000,
-                               format="%d", min_value=1, help=HELP["notional"])
-    tenor_days = st.slider("Tenor (days)", 7, 730, 90, help=HELP["tenor"])
-    spread_pips = st.number_input("Provider spread (pips)", value=20.0, step=1.0,
-                                  help=HELP["spread"])
 
-    if st.button("Add to book", type="primary", use_container_width=True):
-        try:
-            with st.spinner("Pricing at live market rates..."):
-                snap = get_market_snapshot(pair, tenor_days)
-                client_rate = client_rate_with_spread(snap.forward(), spread_pips,
-                                                       client_buys_base)
-                pos = Position(pair, not client_buys_base, float(notional),
-                               int(tenor_days), float(client_rate),
-                               label=f"Client {'buys' if client_buys_base else 'sells'} {base_ccy}")
-                book.add(pos)
-            st.success(f"Booked: provider {pos.side.lower()} {notional:,.0f} "
-                       f"{base_ccy} @ {client_rate:.4f}")
-        except MarketDataError:
-            st.error("Live market data is unavailable right now. Please try again "
-                     "in a moment — the tool does not use synthetic prices.")
-        except Exception as exc:
-            st.error(f"Could not book the trade: {exc}")
-
-    st.divider()
     cc1, cc2 = st.columns(2)
     if cc1.button("Load example", use_container_width=True,
                   help="Load a 3-position sample book to explore the tool."):
@@ -279,11 +249,10 @@ with st.sidebar:
 
 
 # --------------------------------------------------------------------------
-# Tabs
+# Navigation: two zones -- Instruments (price/explore) and Book & Risk (manage)
 # --------------------------------------------------------------------------
-tab_home, tab_book, tab_val, tab_mkt, tab_rls, tab_client = st.tabs(
-    ["Overview", "Book", "Valuation", "Market risk",
-     "Rate / Liquidity / Stress", "Client"])
+tab_home, tab_instruments, tab_bookrisk = st.tabs(
+    ["Overview", "Instruments", "Book & Risk"])
 
 # ============================ 0. OVERVIEW ================================
 with tab_home:
@@ -310,14 +279,15 @@ with tab_home:
     st.subheader("How to use it — three steps")
     st.markdown(
         '<div class="step"><span class="stepnum">1</span><b>Build the book.</b> '
-        'Add a trade from the sidebar (or click <i>Load example</i>). Each trade is '
-        'priced at live market rates and the provider\'s mirror position is recorded. '
-        'See it in the <b>Book</b> tab.</div>', unsafe_allow_html=True)
+        'Add a trade in <b>Instruments → Forward</b> (or click <i>Load example</i> '
+        'in the sidebar). Each trade is priced at live market rates and the '
+        'provider\'s mirror position is recorded. See it under <b>Book & Risk → '
+        'Book</b>.</div>', unsafe_allow_html=True)
     st.markdown(
         '<div class="step"><span class="stepnum">2</span><b>Read the analysis.</b> '
-        'The <b>Valuation</b> tab shows what the book is worth; <b>Market risk</b> '
-        'shows VaR, Expected Shortfall and the model backtest; '
-        '<b>Rate / Liquidity / Stress</b> shows interest-rate, cash and crisis risk.</div>',
+        'Under <b>Book & Risk</b>: <b>Valuation</b> shows what the book is worth; '
+        '<b>Market risk</b> shows VaR, Expected Shortfall and the model backtest; '
+        '<b>Rates & Liquidity</b> shows interest-rate, cash and crisis risk.</div>',
         unsafe_allow_html=True)
     st.markdown(
         '<div class="step"><span class="stepnum">3</span><b>Set limits.</b> '
@@ -352,14 +322,72 @@ with tab_home:
                    "in each section. Educational tool — not investment advice.")
     glossary()
 
+# Define the sub-tabs inside each zone. The existing `with tab_*:` blocks below
+# attach to these, so the two-zone nesting works without re-indenting content.
+with tab_instruments:
+    st.caption("Price and explore a single instrument before putting it in the "
+               "book. Forwards are live; options arrive next.")
+    sub_fwd, sub_opt = st.tabs(["Forward", "Option"])
+
+with tab_bookrisk:
+    st.caption("The book holds every instrument; the analysis below is for the "
+               "whole book.")
+    tab_book, tab_val, tab_mkt, tab_rls, tab_client = st.tabs(
+        ["Book", "Valuation", "Market risk", "Rates & Liquidity", "Client"])
+
+# ===================== INSTRUMENTS · FORWARD =============================
+with sub_fwd:
+    st.subheader("Forward — build & price")
+    st.caption("Define a client trade; the provider books the mirror at live "
+               "market rates. The position is added to the book.")
+    fpair = st.selectbox("Currency pair", PAIRS, key="fwd_pair",
+                         help="EUR/USD and GBP/USD (base USD).")
+    fbase, fquote = fpair.split("/")
+    fside = st.radio("Client wants to", [f"Buy {fbase}", f"Sell {fbase}"],
+                     key="fwd_side",
+                     help="An importer buys the base currency; an exporter sells it.")
+    fbuys = fside.startswith("Buy")
+    fnotional = st.number_input(f"Notional ({fbase})", value=1_000_000, step=100_000,
+                                format="%d", min_value=1, key="fwd_notional",
+                                help=HELP["notional"])
+    ftenor = st.slider("Tenor (days)", 7, 730, 90, key="fwd_tenor", help=HELP["tenor"])
+    fspread = st.number_input("Provider spread (pips)", value=20.0, step=1.0,
+                              key="fwd_spread", help=HELP["spread"])
+
+    if st.button("Add forward to book", type="primary"):
+        try:
+            with st.spinner("Pricing at live market rates..."):
+                snap = get_market_snapshot(fpair, ftenor)
+                client_rate = client_rate_with_spread(snap.forward(), fspread, fbuys)
+                pos = Position(fpair, not fbuys, float(fnotional), int(ftenor),
+                               float(client_rate),
+                               label=f"Client {'buys' if fbuys else 'sells'} {fbase}")
+                book.add(pos)
+            st.success(f"Booked: provider {pos.side.lower()} {fnotional:,.0f} "
+                       f"{fbase} @ {client_rate:.4f}. Theoretical forward "
+                       f"{snap.forward():.4f}; spread {fspread:.0f} pips.")
+        except MarketDataError:
+            st.error("Live market data is unavailable right now. Please try again "
+                     "in a moment — the tool does not use synthetic prices.")
+        except Exception as exc:
+            st.error(f"Could not book the trade: {exc}")
+
+# ===================== INSTRUMENTS · OPTION (placeholder) ================
+with sub_opt:
+    st.subheader("Option — call & put")
+    st.info("Coming next: option pricing (Garman-Kohlhagen), the Greeks "
+            "(delta, gamma, vega, theta), payoff and sensitivity charts. The "
+            "pricing engine already exists in `fxrisk.options`; this screen will "
+            "expose it.")
+
 # ============================ 1. BOOK =====================================
 with tab_book:
     st.subheader("The book")
     st.caption("Each row is a position the provider holds (the mirror of a client "
                "trade). 'Strike' is the rate quoted to the client.")
     if book.is_empty:
-        st.info("The book is empty. Add a trade from the sidebar, or go to the "
-                "Overview tab and load the example book.")
+        st.info("The book is empty. Build a trade in Instruments → Forward, or load "
+                "the example book from the sidebar.")
     else:
         id_to_num = {p.id: f"#{i+1:03d}" for i, p in enumerate(book)}
         st.dataframe(
@@ -393,7 +421,8 @@ if book.is_empty:
                    (tab_rls, "see rate, liquidity and stress"),
                    (tab_client, "see the client view")]:
         with t:
-            st.info(f"Add positions first to {msg}. Use the sidebar or the Overview tab.")
+            st.info(f"Add positions first to {msg}. Build a forward in Instruments → "
+                    f"Forward, or load the example book.")
     st.stop()
 
 # Shared heavy computations.
