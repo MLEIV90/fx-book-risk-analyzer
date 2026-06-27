@@ -257,8 +257,8 @@ with st.sidebar:
 # --------------------------------------------------------------------------
 # Navigation: two zones -- Instruments (price/explore) and Book & Risk (manage)
 # --------------------------------------------------------------------------
-tab_home, tab_instruments, tab_bookrisk = st.tabs(
-    ["Overview", "Instruments", "Book & Risk"])
+tab_home, tab_instruments, tab_bookrisk, tab_limits = st.tabs(
+    ["Overview", "Instruments", "Book & Risk", "Limitations"])
 
 # ============================ 0. OVERVIEW ================================
 with tab_home:
@@ -946,6 +946,82 @@ with tab_client:
         hide_index=True, use_container_width=True)
     st.caption("The rate quoted already includes the provider's spread — the provider's "
                "revenue and the client's cost of certainty.")
+
+# ============================ LIMITATIONS ================================
+with tab_limits:
+    st.subheader("Limitations & scope")
+    st.markdown(
+        '<div class="interp"><b>What this tool is.</b> A demonstration of FX risk '
+        'methodology — pricing, VaR, stress, greeks — built on real but free, '
+        'delayed data, for EUR/USD and GBP/USD. It is rigorous <i>within</i> a '
+        'declared scope. <b>What it is not.</b> A production trading or risk '
+        'system: those use real-time institutional data, full curves across 130+ '
+        'currencies, implied volatility, and validated infrastructure '
+        '(Bloomberg, Murex, etc.). The limits below are deliberate and declared — '
+        'knowing a model\'s boundaries is part of using it responsibly.</div>',
+        unsafe_allow_html=True)
+
+    st.markdown("##### 1 · Data")
+    st.markdown(
+        "- **Free, delayed data.** Spot from yfinance and rates from FRED/ECB are "
+        "free and lightly delayed, not the real-time institutional feeds a desk "
+        "uses. Fine for demonstration, not for live trading.\n"
+        "- **Two pairs only.** EUR/USD and GBP/USD, both quoted in USD. The scope "
+        "was limited on purpose to keep the model focused and defensible.\n"
+        "- **GBP curve is a single point.** The GBP rate is one 3-month interbank "
+        "rate treated as a flat curve. A full curve would come from the Bank of "
+        "England; not wired in.")
+
+    st.markdown("##### 2 · Valuation")
+    st.markdown(
+        "- **Static snapshot, no ageing.** Positions are valued with their "
+        "original tenor — the book is a picture 'as of booking'. There is no "
+        "theta/passage-of-time re-ageing of each trade.\n"
+        "- **Flat curve extrapolation.** Outside the 3M–2Y anchor range the rate "
+        "is held flat (a position with under ~90 days left uses the 3M rate).\n"
+        "- **Compounding conventions.** Forwards use simple rates (the CIP "
+        "convention); options convert to continuous compounding internally "
+        "(Garman-Kohlhagen is a continuous-time model). On short tenors the "
+        "numerical difference is small.")
+
+    st.markdown("##### 3 · Market risk (VaR)")
+    st.markdown(
+        "- **Spot VaR.** The VaR measures exchange-rate risk only; interest-rate "
+        "risk is reported separately as DV01. They are not combined into one "
+        "number.\n"
+        "- **Quote-USD assumption.** The portfolio VaR assumes every pair is "
+        "quoted in USD; a non-USD-quoted pair is rejected (fail-loud) rather than "
+        "summed across currencies incorrectly.\n"
+        "- **Normality of the parametric VaR.** The parametric VaR assumes normal "
+        "returns. This is mitigated by also reporting historical, EWMA and "
+        "Student-t VaR, and by Kupiec + Christoffersen backtests.\n"
+        "- **Fixed stress scenarios.** Stress moves are computed from real crisis "
+        "windows (Brexit, COVID, UK mini-budget) but are then fixed; they are not "
+        "re-derived live. The script that computes them is in the repo for "
+        "traceability.")
+
+    st.markdown("##### 4 · Options")
+    st.markdown(
+        "- **GARCH volatility, not implied.** Options are priced with "
+        "GARCH/historical volatility, **not** the implied volatility the market "
+        "quotes. The result is an indicative **model price**, not a market price — "
+        "this is the single most important option limitation.\n"
+        "- **Option book by greeks, not VaR.** The option book is managed by its "
+        "aggregate greek profile (delta, gamma, vega, theta), not a linear VaR, "
+        "because a covariance VaR would misstate non-linear risk. A "
+        "full-revaluation option VaR is the correct next step and is left as "
+        "documented future work.")
+
+    st.markdown("##### 5 · Overall")
+    st.markdown(
+        "- **Demonstration tool.** Educational/illustrative, not investment "
+        "advice and not a sellable product.\n"
+        "- **No institutional infrastructure.** No real-time data, no 130+ "
+        "currency coverage, no implied-vol surface, none of the security, "
+        "compliance and validation layers a production system carries.")
+
+    st.caption("These limitations are stated so the numbers are read for what they "
+               "are: a rigorous demonstration within a clearly bounded scope.")
 
 # --------------------------------------------------------------------------
 # Footer
