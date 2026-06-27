@@ -120,6 +120,20 @@ def value_book(book: Book) -> BookReport:
     return build_report(valuations, book)
 
 
+def _shift_snapshot(snap: MarketSnapshot, shock_pct: float) -> MarketSnapshot:
+    """
+    Pure helper: return a copy of the snapshot with spot shocked by shock_pct
+    (e.g. -5 => spot * 0.95). Rates and vols are held fixed. Extracted so the
+    shift logic can be unit-tested without any network fetch.
+    """
+    return MarketSnapshot(
+        pair=snap.pair, base_ccy=snap.base_ccy, quote_ccy=snap.quote_ccy,
+        tenor_years=snap.tenor_years, spot=snap.spot * (1 + shock_pct / 100.0),
+        r_base=snap.r_base, r_quote=snap.r_quote,
+        vol_historical=snap.vol_historical, vol_garch=snap.vol_garch,
+    )
+
+
 def book_sensitivity(book: Book, shocks_pct: tuple[float, ...] = (-5, -1, 1, 5)
                      ) -> dict[float, float]:
     """
@@ -132,13 +146,7 @@ def book_sensitivity(book: Book, shocks_pct: tuple[float, ...] = (-5, -1, 1, 5)
     for shock in shocks_pct:
         total = 0.0
         for p in book:
-            snap = base_snaps[p.id]
-            shifted = MarketSnapshot(
-                pair=snap.pair, base_ccy=snap.base_ccy, quote_ccy=snap.quote_ccy,
-                tenor_years=snap.tenor_years, spot=snap.spot * (1 + shock / 100.0),
-                r_base=snap.r_base, r_quote=snap.r_quote,
-                vol_historical=snap.vol_historical, vol_garch=snap.vol_garch,
-            )
+            shifted = _shift_snapshot(base_snaps[p.id], shock)
             total += value_position_from_snapshot(p, shifted).mtm_quote
         out[shock] = total
     return out

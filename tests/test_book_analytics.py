@@ -60,3 +60,32 @@ def test_report_carries_data_flags():
     pos = Position("EUR/USD", True, 1_000_000, 90, snap.forward())
     report = build_report([value_position_from_snapshot(pos, snap)], Book([pos]))
     assert any("Flat curve" in f for f in report.data_flags)
+
+
+def test_shift_snapshot_scales_spot_only():
+    """_shift_snapshot must scale spot by the shock and leave rates/vols intact."""
+    from fxrisk.book_analytics import _shift_snapshot
+    from fxrisk.market import MarketSnapshot
+    snap = MarketSnapshot(
+        pair="EUR/USD", base_ccy="EUR", quote_ccy="USD", tenor_years=0.25,
+        spot=1.1000, r_base=0.021, r_quote=0.039,
+        vol_historical=0.08, vol_garch=0.09)
+    down = _shift_snapshot(snap, -5)
+    up = _shift_snapshot(snap, +10)
+    assert abs(down.spot - 1.1000 * 0.95) < 1e-12
+    assert abs(up.spot - 1.1000 * 1.10) < 1e-12
+    # Everything else unchanged.
+    assert down.r_base == snap.r_base and down.r_quote == snap.r_quote
+    assert down.vol_garch == snap.vol_garch
+    assert down.tenor_years == snap.tenor_years
+
+
+def test_shift_snapshot_zero_shock_is_identity():
+    """A 0% shock returns the same spot."""
+    from fxrisk.book_analytics import _shift_snapshot
+    from fxrisk.market import MarketSnapshot
+    snap = MarketSnapshot(
+        pair="GBP/USD", base_ccy="GBP", quote_ccy="USD", tenor_years=0.5,
+        spot=1.2700, r_base=0.045, r_quote=0.039,
+        vol_historical=0.10, vol_garch=None)
+    assert abs(_shift_snapshot(snap, 0).spot - 1.2700) < 1e-12

@@ -18,7 +18,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from fxrisk.curves import supported_currencies
-from fxrisk.market import get_market_snapshot, MarketSnapshot
+from fxrisk.market import get_market_snapshot
 from fxrisk.forwards import client_rate_with_spread
 from fxrisk.options import (garman_kohlhagen, option_delta, option_gamma,
                             option_vega, option_theta)
