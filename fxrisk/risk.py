@@ -253,23 +253,27 @@ def simulate_liquidity_need(notional_quote: float, daily_vol: float,
 # not live-recomputed; a production model would recompute them from the dated
 # price series. Sources: public spot history (e.g. ECB/Fed reference rates) for
 # the windows shown.
+# Stress scenarios: peak-to-trough spot moves during real crises.
+# COMPUTED (not hand-typed) by scripts/compute_stress_scenarios.py from real
+# yfinance price history of each window. Re-run that script to recalibrate.
+# Each value is the worst peak-to-trough return of the pair inside the event
+# window. Sources/windows are documented in STRESS_SCENARIO_SOURCES below.
 STRESS_SCENARIO_SOURCES: dict[str, str] = {
     "Brexit referendum (Jun 2016)":
-        "EUR/USD and GBP/USD spot move, 23-27 Jun 2016 (referendum result). "
-        "GBP/USD fell ~8% from ~1.50 to ~1.37.",
+        "Peak-to-trough spot move, 22 Jun - 8 Jul 2016 (referendum result). "
+        "GBP/USD -12.6%, EUR/USD -2.8%.",
     "COVID crash (Mar 2020)":
-        "Spot move during the 9-23 Mar 2020 liquidity crisis. GBP/USD fell "
-        "~10-11% to a multi-decade low; EUR/USD ~3-4%.",
-    "SNB de-peg spillover (Jan 2015)":
-        "15 Jan 2015 removal of the EUR/CHF floor. The large move was in CHF "
-        "pairs; the figures here are the SPILLOVER into EUR/USD and GBP/USD, "
-        "which was modest (~1-2%). A CHF pair would show the full shock.",
+        "Peak-to-trough move, 20 Feb - 23 Mar 2020 (liquidity crisis). "
+        "GBP/USD -12.3%, EUR/USD -6.5%.",
+    "UK mini-budget (Sep 2022)":
+        "Peak-to-trough move, 22-30 Sep 2022 (the 'mini-budget' that drove "
+        "GBP/USD toward an all-time low). GBP/USD -4.8%, EUR/USD -2.5%.",
 }
 
 STRESS_SCENARIOS: dict[str, dict[str, float]] = {
-    "Brexit referendum (Jun 2016)":   {"EUR/USD": -0.02, "GBP/USD": -0.08},
-    "COVID crash (Mar 2020)":         {"EUR/USD": -0.035, "GBP/USD": -0.10},
-    "SNB de-peg spillover (Jan 2015)": {"EUR/USD": -0.02, "GBP/USD": -0.015},
+    "Brexit referendum (Jun 2016)": {"EUR/USD": -0.0276, "GBP/USD": -0.126},
+    "COVID crash (Mar 2020)":       {"EUR/USD": -0.065, "GBP/USD": -0.1225},
+    "UK mini-budget (Sep 2022)":    {"EUR/USD": -0.0249, "GBP/USD": -0.0476},
 }
 
 
