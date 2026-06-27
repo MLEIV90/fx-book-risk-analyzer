@@ -36,8 +36,15 @@ def test_unknown_currency_raises():
 
 
 def test_majors_are_configured():
-    for ccy in ("USD", "EUR", "GBP", "JPY", "CHF", "CAD", "AUD"):
+    # Scope is intentionally limited to EUR, GBP and USD (base USD).
+    for ccy in ("USD", "EUR", "GBP"):
         assert ccy in supported_currencies()
+
+
+def test_removed_currencies_are_gone():
+    # JPY/CHF/CAD/AUD were removed; the model is EUR/GBP/USD only.
+    for ccy in ("JPY", "CHF", "CAD", "AUD"):
+        assert ccy not in supported_currencies()
 
 
 def test_parse_ecb_csv_returns_decimal():

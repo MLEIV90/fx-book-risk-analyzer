@@ -7,9 +7,9 @@ Sources, per currency:
 - USD: FRED Treasury constant-maturity points (3M, 6M, 1Y, 2Y). Daily, full curve.
 - EUR: ECB yield curve (AAA euro-area government spot rates) at 3M, 6M, 1Y, 2Y.
        Daily, full curve, from the ECB Data Portal.
-- GBP, JPY, CHF, CAD, AUD: FRED 3-month interbank reference rate (single point,
-       monthly) -> treated as a flat curve and SAID SO. A full curve for these
-       would come from each central bank (BoE, etc.); not wired in v1.
+- GBP: FRED 3-month interbank reference rate (single point, monthly)
+       -> treated as a flat curve and SAID SO. A full curve would come from
+       the Bank of England; not wired in this academic version.
 
 Honesty: every rate is REAL. Where only one point exists, the curve is flat and
 the limitation is recorded in `notes`. Nothing is invented; on failure we raise.
@@ -24,6 +24,8 @@ from dataclasses import dataclass, field
 import numpy as np
 
 # --- FRED-based currencies: (tenor_years, series_id) -----------------------
+# Scope: this academic tool covers EUR, GBP and USD only (base currency USD).
+# Other currencies were removed to keep the model focused and the code clean.
 FRED_SERIES: dict[str, list[tuple[float, str]]] = {
     # USD curve. Anchor points 3M, 6M, 1Y, 2Y -- aligned with EUR (the ECB
     # curve has no 1M point), so both curves are built the same way.
@@ -31,11 +33,8 @@ FRED_SERIES: dict[str, list[tuple[float, str]]] = {
     "USD": [
         (3 / 12, "DGS3MO"), (6 / 12, "DGS6MO"), (1.0, "DGS1"), (2.0, "DGS2"),
     ],
+    # GBP: single 3-month interbank point -> treated as a flat curve (declared).
     "GBP": [(3 / 12, "IR3TIB01GBM156N")],
-    "JPY": [(3 / 12, "IR3TIB01JPM156N")],
-    "CHF": [(3 / 12, "IR3TIB01CHM156N")],
-    "CAD": [(3 / 12, "IR3TIB01CAM156N")],
-    "AUD": [(3 / 12, "IR3TIB01AUM156N")],
 }
 
 # --- ECB yield curve points for EUR: (tenor_years, maturity_code) ----------
