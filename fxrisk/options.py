@@ -111,3 +111,46 @@ def option_vega(spot: float, strike: float, r_base: float, r_quote: float,
     d1, _ = _d1_d2(spot, strike, _to_continuous(r_base, tau),
                    _to_continuous(r_quote, tau), vol, tau)
     return spot * math.exp(-_to_continuous(r_base, tau) * tau) * math.sqrt(tau) * norm_pdf(d1)
+
+def option_gamma(spot: float, strike: float, r_base: float, r_quote: float,
+                 vol: float, tau: float) -> float:
+    """
+    Gamma: the rate of change of delta per unit move in spot -- the curvature
+    (non-linearity) of the option. The same for calls and puts.
+
+    gamma = exp(-r_base*tau) * n(d1) / (S * vol * sqrt(tau))
+
+    Gamma is why an option's risk cannot be captured by delta alone: as spot
+    moves, the delta itself changes, and gamma measures how fast.
+    """
+    rb_c = _to_continuous(r_base, tau)
+    rq_c = _to_continuous(r_quote, tau)
+    d1, _ = _d1_d2(spot, strike, rb_c, rq_c, vol, tau)
+    return math.exp(-rb_c * tau) * norm_pdf(d1) / (spot * vol * math.sqrt(tau))
+
+
+def option_theta(spot: float, strike: float, r_base: float, r_quote: float,
+                 vol: float, tau: float, is_call: bool = True) -> float:
+    """
+    Theta: the change in the option's value as one day passes (time decay),
+    holding everything else fixed. Returned PER CALENDAR DAY (the annual theta
+    divided by 365), and is typically NEGATIVE -- an option loses value as it
+    approaches expiry.
+
+    Full Garman-Kohlhagen theta (annual), then divided by 365 for per-day.
+    """
+    rb_c = _to_continuous(r_base, tau)
+    rq_c = _to_continuous(r_quote, tau)
+    d1, d2 = _d1_d2(spot, strike, rb_c, rq_c, vol, tau)
+    disc_base = math.exp(-rb_c * tau)
+    disc_quote = math.exp(-rq_c * tau)
+    term1 = -spot * disc_base * norm_pdf(d1) * vol / (2.0 * math.sqrt(tau))
+    if is_call:
+        annual = (term1
+                  + rb_c * spot * disc_base * norm_cdf(d1)
+                  - rq_c * strike * disc_quote * norm_cdf(d2))
+    else:
+        annual = (term1
+                  - rb_c * spot * disc_base * norm_cdf(-d1)
+                  + rq_c * strike * disc_quote * norm_cdf(-d2))
+    return annual / 365.0

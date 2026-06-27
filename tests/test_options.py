@@ -78,3 +78,36 @@ def test_put_call_parity_holds():
     lhs = call - put
     rhs = S * math.exp(-rb_c * tau) - K * math.exp(-rq_c * tau)
     assert abs(lhs - rhs) < 1e-9                   # parity exact
+
+
+def test_gamma_matches_finite_difference():
+    """Gamma must equal the numerical derivative of delta w.r.t. spot."""
+    from fxrisk.options import option_delta, option_gamma
+    S, K, rb, rq, vol, tau = 1.10, 1.08, 0.03, 0.05, 0.12, 0.5
+    h = 1e-5
+    fd = (option_delta(S + h, K, rb, rq, vol, tau, True)
+          - option_delta(S - h, K, rb, rq, vol, tau, True)) / (2 * h)
+    assert abs(option_gamma(S, K, rb, rq, vol, tau) - fd) < 1e-3
+
+
+def test_gamma_positive_and_symmetric():
+    """Gamma is positive and identical for calls and puts (same formula)."""
+    from fxrisk.options import option_gamma
+    g = option_gamma(1.10, 1.10, 0.03, 0.05, 0.10, 0.5)
+    assert g > 0
+
+
+def test_theta_is_negative_decay():
+    """Theta (per day) should be negative for a standard option (time decay)."""
+    from fxrisk.options import option_theta
+    th = option_theta(1.10, 1.10, 0.03, 0.05, 0.10, 0.5, is_call=True)
+    assert th < 0
+
+
+def test_theta_matches_finite_difference():
+    """Theta/day must match the price change as one day passes."""
+    from fxrisk.options import garman_kohlhagen, option_theta
+    S, K, rb, rq, vol, tau = 1.10, 1.08, 0.03, 0.05, 0.12, 0.5
+    fd = (garman_kohlhagen(S, K, rb, rq, vol, tau - 1/365, True)
+          - garman_kohlhagen(S, K, rb, rq, vol, tau, True))
+    assert abs(option_theta(S, K, rb, rq, vol, tau, True) - fd) < 1e-4

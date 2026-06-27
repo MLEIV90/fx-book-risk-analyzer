@@ -20,6 +20,8 @@ import streamlit as st
 from fxrisk.curves import supported_currencies
 from fxrisk.market import get_market_snapshot, MarketSnapshot
 from fxrisk.forwards import client_rate_with_spread
+from fxrisk.options import (garman_kohlhagen, option_delta, option_gamma,
+                            option_vega, option_theta)
 from fxrisk.book import Position, Book
 from fxrisk.data import MarketDataError
 from fxrisk.book_analytics import value_book, book_sensitivity
@@ -374,11 +376,159 @@ with sub_fwd:
 
 # ===================== INSTRUMENTS · OPTION (placeholder) ================
 with sub_opt:
-    st.subheader("Option — call & put")
-    st.info("Coming next: option pricing (Garman-Kohlhagen), the Greeks "
-            "(delta, gamma, vega, theta), payoff and sensitivity charts. The "
-            "pricing engine already exists in `fxrisk.options`; this screen will "
-            "expose it.")
+    st.subheader("Option — call & put (Garman-Kohlhagen)")
+    st.markdown(
+        '<div class="interp"><b>Theoretical price, not a market price.</b> This '
+        'screen prices the option with <b>GARCH/historical volatility</b>, not the '
+        '<b>implied volatility</b> the market quotes. The real market price would '
+        'use implied vol; this is an indicative model price. (See Limitations.)</div>',
+        unsafe_allow_html=True)
+
+    oc1, oc2, oc3 = st.columns(3)
+    opair = oc1.selectbox("Currency pair", PAIRS, key="opt_pair")
+    otype = oc2.radio("Type", ["Call", "Put"], key="opt_type", horizontal=True)
+    is_call = otype == "Call"
+    otenor = oc3.slider("Tenor (days)", 7, 730, 90, key="opt_tenor")
+    obase, oquote = opair.split("/")
+    onotional = oc1.number_input(f"Notional ({obase})", value=1_000_000, step=100_000,
+                                 format="%d", min_value=1, key="opt_notional")
+
+    if st.button("Price option", type="primary", key="opt_price_btn"):
+        try:
+            with st.spinner("Fetching spot, rates and volatility..."):
+                snap = get_market_snapshot(opair, otenor)
+                tau = snap.tenor_years
+                # GARCH vol when available, else historical (declared fallback).
+                vol = snap.vol_garch if snap.vol_garch is not None else snap.vol_historical
+                vol_label = "GARCH" if snap.vol_garch is not None else "historical"
+                # Default strike = at-the-money forward, but let the user adjust.
+                st.session_state["opt_snap"] = {
+                    "spot": snap.spot, "fwd": snap.forward(), "r_base": snap.r_base,
+                    "r_quote": snap.r_quote, "vol": vol, "tau": tau, "pair": opair,
+                    "vol_label": vol_label}
+        except MarketDataError:
+            st.error("Live market data is unavailable right now. Please try again.")
+        except Exception as exc:
+            st.error(f"Could not price the option: {exc}")
+
+    snapd = st.session_state.get("opt_snap")
+    if snapd and snapd["pair"] == opair:
+        spot, fwd = snapd["spot"], snapd["fwd"]
+        rb, rq, vol, tau = (snapd["r_base"], snapd["r_quote"], snapd["vol"], snapd["tau"])
+
+        # Strike control, defaulting to the at-the-money forward.
+        strike = st.number_input("Strike", value=round(float(fwd), 4),
+                                 step=0.0010, format="%.4f", key="opt_strike",
+                                 help="Default is the at-the-money forward. "
+                                      "Move it to see in/out-of-the-money behaviour.")
+
+        # Price and primary Greeks.
+        premium_unit = garman_kohlhagen(spot, strike, rb, rq, vol, tau, is_call)
+        premium_total = premium_unit * onotional
+        delta = option_delta(spot, strike, rb, rq, vol, tau, is_call)
+        vega = option_vega(spot, strike, rb, rq, vol, tau)
+
+        st.markdown("##### Price")
+        cards([
+            {"label": f"Premium (total {oquote})", "value": f"{premium_total:,.0f}",
+             "kind": "accent"},
+            {"label": "Premium (per unit)", "value": f"{premium_unit:.5f}"},
+            {"label": "Spot", "value": f"{spot:.4f}"},
+            {"label": "Forward", "value": f"{fwd:.4f}"},
+        ])
+        st.caption(f"{snapd.get('vol_label','GARCH')} volatility used: {vol:.1%} annual "
+                   f"· tenor {tau*365:.0f} days · {otype} struck at {strike:.4f}.")
+
+        st.markdown("##### Primary risk (Greeks)")
+        cards([
+            {"label": "Delta", "value": f"{delta:.4f}",
+             "sub": "hedge ratio (base per option)", "kind": "accent"},
+            {"label": "Vega", "value": f"{vega/100:.5f}",
+             "sub": "per 1 vol point"},
+        ])
+        st.caption("Delta: how much the option moves per unit of spot — the amount "
+                   "of base currency to hedge. Vega: sensitivity to volatility.")
+
+        with st.expander("Full Greeks & put-call parity check"):
+            gamma = option_gamma(spot, strike, rb, rq, vol, tau)
+            theta = option_theta(spot, strike, rb, rq, vol, tau, is_call)
+            cards([
+                {"label": "Gamma", "value": f"{gamma:.4f}",
+                 "sub": "delta change per unit spot"},
+                {"label": "Theta / day", "value": f"{theta:.6f}",
+                 "sub": "time decay (per calendar day)"},
+            ])
+            # Put-call parity validation: C - P = S*DF_base - K*DF_quote.
+            call = garman_kohlhagen(spot, strike, rb, rq, vol, tau, True)
+            put = garman_kohlhagen(spot, strike, rb, rq, vol, tau, False)
+            import math as _m
+            rb_c = _m.log(1 + rb * tau) / tau
+            rq_c = _m.log(1 + rq * tau) / tau
+            parity_rhs = spot * _m.exp(-rb_c * tau) - strike * _m.exp(-rq_c * tau)
+            st.caption(f"Put-call parity: C − P = {call - put:.6f}, "
+                       f"S·DF − K·DF = {parity_rhs:.6f} — "
+                       f"{'consistent ✓' if abs((call-put)-parity_rhs) < 1e-6 else 'mismatch'}. "
+                       f"A passing parity check confirms the pricer is internally consistent.")
+
+        # ---- charts ----
+        import numpy as _np
+        grid = _np.linspace(spot * 0.85, spot * 1.15, 60)
+
+        st.markdown("##### Payoff at expiry")
+        st.caption("Profit/loss per unit of base at maturity, depending on where spot "
+                   "settles. The premium paid is the maximum loss.")
+        if is_call:
+            payoff = _np.maximum(grid - strike, 0.0) - premium_unit
+        else:
+            payoff = _np.maximum(strike - grid, 0.0) - premium_unit
+        fig_p = go.Figure()
+        fig_p.add_trace(go.Scatter(x=grid, y=payoff, mode="lines",
+                                   line=dict(color=PLOT_ACCENT, width=2),
+                                   name="Payoff",
+                                   hovertemplate="Spot %{x:.4f}<br>P&L %{y:.5f}<extra></extra>"))
+        fig_p.add_hline(y=0, line_color=PLOT_GRID)
+        fig_p.add_vline(x=strike, line_color=PLOT_AMBER, line_dash="dash",
+                        annotation_text="Strike")
+        fig_p.update_xaxes(title_text="Spot at expiry")
+        fig_p.update_yaxes(title_text="P&L per unit")
+        st.plotly_chart(_plotly_layout(fig_p), use_container_width=True,
+                        config={"displayModeBar": False})
+
+        gc1, gc2 = st.columns(2)
+        with gc1:
+            st.markdown("##### Value vs spot (today)")
+            st.caption("How the premium changes if spot moves today — smooth, unlike "
+                       "the kinked payoff, because time value remains.")
+            vals = [garman_kohlhagen(s, strike, rb, rq, vol, tau, is_call) for s in grid]
+            fig_v = go.Figure(go.Scatter(x=grid, y=vals, mode="lines",
+                              line=dict(color=PLOT_ACCENT, width=2),
+                              hovertemplate="Spot %{x:.4f}<br>Value %{y:.5f}<extra></extra>"))
+            fig_v.add_vline(x=spot, line_color=PLOT_AMBER, line_dash="dash",
+                            annotation_text="Spot now")
+            fig_v.update_xaxes(title_text="Spot today")
+            fig_v.update_yaxes(title_text="Option value")
+            st.plotly_chart(_plotly_layout(fig_v), use_container_width=True,
+                            config={"displayModeBar": False})
+        with gc2:
+            st.markdown("##### Delta & gamma vs spot")
+            st.caption("Delta changes as spot moves (that change is gamma) — the "
+                       "non-linearity that makes options different from forwards.")
+            deltas = [option_delta(s, strike, rb, rq, vol, tau, is_call) for s in grid]
+            gammas = [option_gamma(s, strike, rb, rq, vol, tau) for s in grid]
+            fig_g = go.Figure()
+            fig_g.add_trace(go.Scatter(x=grid, y=deltas, mode="lines", name="Delta",
+                                       line=dict(color=PLOT_ACCENT, width=2)))
+            fig_g.add_trace(go.Scatter(x=grid, y=gammas, mode="lines", name="Gamma",
+                                       line=dict(color=PLOT_AMBER, width=2), yaxis="y2"))
+            fig_g.update_layout(yaxis2=dict(overlaying="y", side="right",
+                                            showgrid=False, title="Gamma"))
+            fig_g.update_xaxes(title_text="Spot")
+            fig_g.update_yaxes(title_text="Delta")
+            st.plotly_chart(_plotly_layout(fig_g), use_container_width=True,
+                            config={"displayModeBar": False})
+    else:
+        st.caption("Choose the option's terms and click **Price option** to see its "
+                   "premium, Greeks and payoff.")
 
 # ============================ 1. BOOK =====================================
 with tab_book:
