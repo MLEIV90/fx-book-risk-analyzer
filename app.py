@@ -22,9 +22,10 @@ from fxrisk.market import get_market_snapshot
 from fxrisk.forwards import client_rate_with_spread
 from fxrisk.options import (garman_kohlhagen, option_delta, option_gamma,
                             option_vega, option_theta)
-from fxrisk.option_book import OptionPosition, OptionBook, option_book_greeks
+from fxrisk.option_book import (OptionPosition, OptionBook, option_book_greeks,
+                                option_book_var)
 from fxrisk.book import Position, Book
-from fxrisk.data import MarketDataError
+from fxrisk.data import MarketDataError, to_returns
 from fxrisk.book_analytics import value_book, book_sensitivity
 from fxrisk.portfolio_risk import (
     portfolio_var, kupiec_backtest, rolling_backtest, stressed_var,
@@ -32,7 +33,8 @@ from fxrisk.portfolio_risk import (
 from fxrisk.book_risk import (dv01_book, liquidity_book, stress_book,
                               dv01_book_by_tenor)
 from fxrisk.limits import LimitsConfig, check_limits
-from app_helpers import snapshots_for_book, factor_setup, cached_snapshot, CACHE_TTL_SECONDS
+from app_helpers import (snapshots_for_book, factor_setup, cached_snapshot,
+                         cached_spot_history)
 
 st.set_page_config(page_title="FX Book Risk Analyzer", layout="wide",
                    initial_sidebar_state="expanded")
@@ -594,6 +596,42 @@ with sub_opt:
                        "spot/forward). Net gamma shows how fast that delta moves. "
                        "Net vega is exposure to volatility. Net theta is the daily "
                        "bleed from time decay.")
+
+            # A2: full-revaluation VaR of the option book (non-linear).
+            st.markdown("##### Option book VaR (full revaluation)")
+            try:
+                ob_returns = {}
+                hist = cached_spot_history(tuple(option_book.pairs()), period="2y")
+                hist_ret = to_returns(hist)
+                for pr in option_book.pairs():
+                    ob_returns[pr] = hist_ret[pr].to_numpy()
+                vres = option_book_var(option_book, ob_spots, ob_rates, ob_returns,
+                                       confidence=confidence, n_sims=20000)
+                cards([
+                    {"label": f"VaR · full reval ({confidence:.0%})",
+                     "value": f"{vres['var_full_reval']:,.0f}",
+                     "sub": "re-prices every option", "kind": "accent"},
+                    {"label": "VaR · delta-equivalent",
+                     "value": f"{vres['var_delta_equiv']:,.0f}",
+                     "sub": "linear approximation"},
+                    {"label": "Gamma effect",
+                     "value": f"{vres['gamma_effect']:+,.0f}",
+                     "sub": "non-linearity captured", "kind": "warn"},
+                ])
+                st.markdown(
+                    '<div class="interp"><b>Full revaluation</b> re-prices each option '
+                    'with Garman-Kohlhagen under thousands of simulated spot scenarios, '
+                    'so it captures the <b>gamma</b> (curvature) that a linear '
+                    '<b>delta-equivalent</b> VaR misses. The <b>gamma effect</b> is the '
+                    'gap between them: for long options it is usually negative (positive '
+                    'gamma cushions losses), so the linear VaR overstates the risk. '
+                    'Scope: only spot is shocked (a spot/delta-gamma VaR); volatility '
+                    'risk (vega) is held fixed and would be the next step.</div>',
+                    unsafe_allow_html=True)
+            except MarketDataError:
+                st.caption("Market data unavailable to compute the option book VaR.")
+            except Exception as exc:
+                st.caption(f"Could not compute option book VaR: {exc}")
         except MarketDataError:
             st.error("Live market data unavailable to value the option book.")
         except Exception as exc:

@@ -1,6 +1,7 @@
 """Tests for the option book and its aggregate greeks."""
 import numpy as np
-from fxrisk.option_book import OptionPosition, OptionBook, option_book_greeks
+from fxrisk.option_book import (OptionPosition, OptionBook, option_book_greeks,
+                                option_book_var)
 from fxrisk.options import option_delta, option_gamma
 
 
@@ -76,3 +77,41 @@ def test_theta_negative_time_decay():
     book = _sample_book()
     result = option_book_greeks(book, SPOTS, RATES)
     assert result["totals"]["theta"] < 0
+
+
+def _returns_dict(seed=0, n=500, vol=0.006):
+    import numpy as np
+    rng = np.random.default_rng(seed)
+    return {"EUR/USD": rng.standard_normal(n) * vol}
+
+
+def test_full_reval_var_positive_and_bounded():
+    """Full-revaluation VaR must be positive and below the notional."""
+    book = OptionBook([OptionPosition("EUR/USD", True, 10_000_000, 1.0850, 30, 0.08)])
+    r = option_book_var(book, {"EUR/USD": 1.0850}, {"EUR/USD": (0.021, 0.039)},
+                        _returns_dict(), n_sims=10000)
+    assert 0 < r["var_full_reval"] < 10_000_000
+
+
+def test_full_reval_differs_from_delta_for_atm():
+    """For an ATM option (high gamma), full-reval must differ from delta-equiv."""
+    book = OptionBook([OptionPosition("EUR/USD", True, 10_000_000, 1.0850, 30, 0.08)])
+    r = option_book_var(book, {"EUR/USD": 1.0850}, {"EUR/USD": (0.021, 0.039)},
+                        _returns_dict(), n_sims=20000)
+    # Non-trivial gamma effect: the two methods disagree.
+    assert abs(r["gamma_effect"]) > 1.0
+    assert abs(r["gamma_effect"]) / r["var_delta_equiv"] > 0.05
+
+
+def test_full_reval_converges_to_delta_for_deep_itm():
+    """For a deep ITM option (low gamma), full-reval ~ delta-equiv (near-linear)."""
+    book = OptionBook([OptionPosition("EUR/USD", True, 10_000_000, 0.95, 30, 0.08)])
+    r = option_book_var(book, {"EUR/USD": 1.0850}, {"EUR/USD": (0.021, 0.039)},
+                        _returns_dict(), n_sims=20000)
+    assert abs(r["gamma_effect"]) / r["var_delta_equiv"] < 0.05
+
+
+def test_full_reval_empty_book_is_zero():
+    """An empty option book has zero VaR."""
+    r = option_book_var(OptionBook(), {}, {}, {}, n_sims=1000)
+    assert r["var_full_reval"] == 0.0
