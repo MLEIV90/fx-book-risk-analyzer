@@ -85,3 +85,13 @@ def test_stress_scenarios_present():
     assert len(STRESS_SCENARIOS) >= 3
     for sc in STRESS_SCENARIOS.values():
         assert "EUR/USD" in sc and "GBP/USD" in sc
+
+def test_var_parametric_single_point_no_warning():
+    """V3: VaR with a single observation returns 0 without a RuntimeWarning."""
+    import warnings
+    import numpy as np
+    from fxrisk.risk import var_parametric
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        v = var_parametric(np.array([[0.01]]), np.array([1e6]), 0.99)
+    assert v == 0.0

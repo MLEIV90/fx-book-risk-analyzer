@@ -110,9 +110,14 @@ def var_parametric(returns: np.ndarray, positions: np.ndarray,
     """
     from scipy.stats import norm
 
+    returns = np.atleast_2d(returns)
+    if returns.shape[0] < 2:
+        # V3: a single observation has no estimable covariance. Return 0 rather
+        # than emitting a divide-by-zero RuntimeWarning from np.cov(ddof=1).
+        return 0.0
     cov = np.atleast_2d(np.cov(returns, rowvar=False))   # 1 factor -> 1x1
     port_var = float(positions @ cov @ positions)
-    port_sd = np.sqrt(port_var)
+    port_sd = np.sqrt(max(port_var, 0.0))
     z = norm.ppf(confidence)
     return z * port_sd
 

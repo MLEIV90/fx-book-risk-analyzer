@@ -29,6 +29,7 @@ import numpy as np
 
 from fxrisk.options import (garman_kohlhagen, option_delta, option_gamma,
                             option_vega, option_theta)
+from fxrisk.forwards import year_fraction
 
 
 @dataclass
@@ -107,7 +108,7 @@ def option_book_greeks(book: OptionBook, spots: dict[str, float],
     for p in book:
         spot = spots[p.pair]
         r_base, r_quote = rates[p.pair]
-        tau = p.tenor_days / 365.0
+        tau = year_fraction(p.tenor_days)   # ACT/360, consistent with forwards
         value_unit = garman_kohlhagen(spot, p.strike, r_base, r_quote, p.vol, tau,
                                       p.is_call)
         delta = option_delta(spot, p.strike, r_base, r_quote, p.vol, tau, p.is_call)
@@ -176,7 +177,7 @@ def option_book_var(book: OptionBook, spots: dict[str, float],
     # Pre-compute per-option references once.
     opts = []
     for p in book:
-        tau = p.tenor_days / 365.0
+        tau = year_fraction(p.tenor_days)   # ACT/360, consistent with forwards
         rb, rq = rates[p.pair]
         s0 = spots[p.pair]
         v0 = garman_kohlhagen(s0, p.strike, rb, rq, p.vol, tau, p.is_call)

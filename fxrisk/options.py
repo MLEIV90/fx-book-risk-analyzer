@@ -70,12 +70,31 @@ def garman_kohlhagen(spot: float, strike: float, r_base: float, r_quote: float,
     Input rates are annual SIMPLE rates (as elsewhere in the engine); they are
     converted to continuous compounding internally. Multiply by the notional
     (in base) to get the total premium in quote currency.
+
+    Edge cases (V1/V2): inputs are validated, and the degenerate limit where
+    vol*sqrt(tau) -> 0 (at expiry, or zero volatility) returns the discounted
+    intrinsic value instead of dividing by zero.
     """
-    rb_c = _to_continuous(r_base, tau)
-    rq_c = _to_continuous(r_quote, tau)
-    d1, d2 = _d1_d2(spot, strike, rb_c, rq_c, vol, tau)
+    if not all(math.isfinite(x) for x in (spot, strike, r_base, r_quote, vol, tau)):
+        raise ValueError("garman_kohlhagen received a non-finite input.")
+    if spot <= 0 or strike <= 0:
+        raise ValueError("Spot and strike must be positive.")
+    if vol < 0 or tau < 0:
+        raise ValueError("Volatility and tenor must be non-negative.")
+
+    rb_c = _to_continuous(r_base, tau) if tau > 0 else 0.0
+    rq_c = _to_continuous(r_quote, tau) if tau > 0 else 0.0
     disc_base = math.exp(-rb_c * tau)
     disc_quote = math.exp(-rq_c * tau)
+
+    # Degenerate limit: no time value left -> discounted intrinsic value.
+    if vol * math.sqrt(tau) < 1e-12:
+        fwd_intrinsic = spot * disc_base - strike * disc_quote
+        if is_call:
+            return max(fwd_intrinsic, 0.0)
+        return max(-fwd_intrinsic, 0.0)
+
+    d1, d2 = _d1_d2(spot, strike, rb_c, rq_c, vol, tau)
     if is_call:
         return spot * disc_base * norm_cdf(d1) - strike * disc_quote * norm_cdf(d2)
     return strike * disc_quote * norm_cdf(-d2) - spot * disc_base * norm_cdf(-d1)

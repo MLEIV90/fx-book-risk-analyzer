@@ -43,11 +43,12 @@ def test_greeks_aggregate_keys():
 
 def test_delta_scaled_by_notional():
     """Total delta must equal sum of per-option delta * notional."""
+    from fxrisk.forwards import year_fraction
     book = _sample_book()
     result = option_book_greeks(book, SPOTS, RATES)
     manual = 0.0
     for p in book:
-        tau = p.tenor_days / 365.0
+        tau = year_fraction(p.tenor_days)   # ACT/360, consistent with engine
         rb, rq = RATES[p.pair]
         manual += option_delta(SPOTS[p.pair], p.strike, rb, rq, p.vol, tau,
                                p.is_call) * p.notional_base

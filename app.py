@@ -495,7 +495,7 @@ with sub_opt:
                 st.session_state["opt_snap"] = {
                     "spot": snap.spot, "fwd": snap.forward(), "r_base": snap.r_base,
                     "r_quote": snap.r_quote, "vol": vol, "tau": tau, "pair": opair,
-                    "vol_label": vol_label}
+                    "vol_label": vol_label, "tenor_days": otenor}
         except MarketDataError:
             st.error("Live market data is unavailable right now. Please try again.")
         except Exception as exc:
@@ -622,7 +622,7 @@ with sub_opt:
         if st.button("Add to option book", key="opt_add_btn"):
             option_book.add(OptionPosition(
                 pair=opair, is_call=is_call, notional_base=float(onotional),
-                strike=float(strike), tenor_days=int(tau * 365), vol=float(vol),
+                strike=float(strike), tenor_days=int(snapd["tenor_days"]), vol=float(vol),
                 premium_unit=float(premium_unit),
                 label=f"{otype} {opair} @ {strike:.4f}"))
             st.success(f"Added to option book: {otype} {onotional:,.0f} {obase} "

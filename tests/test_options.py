@@ -111,3 +111,30 @@ def test_theta_matches_finite_difference():
     fd = (garman_kohlhagen(S, K, rb, rq, vol, tau - 1/365, True)
           - garman_kohlhagen(S, K, rb, rq, vol, tau, True))
     assert abs(option_theta(S, K, rb, rq, vol, tau, True) - fd) < 1e-4
+
+
+def test_gk_at_expiry_returns_intrinsic():
+    """V1: at tau=0 the price is the intrinsic value, not a crash."""
+    from fxrisk.options import garman_kohlhagen
+    # tau=0: discount factors are 1, intrinsic = max(S-K, 0) for a call
+    assert abs(garman_kohlhagen(1.20, 1.00, 0.02, 0.03, 0.10, 0.0, True) - 0.20) < 1e-9
+    assert garman_kohlhagen(1.00, 1.20, 0.02, 0.03, 0.10, 0.0, True) == 0.0
+
+
+def test_gk_zero_vol_no_crash():
+    """V1: zero volatility returns discounted intrinsic without dividing by zero."""
+    from fxrisk.options import garman_kohlhagen
+    val = garman_kohlhagen(1.20, 1.00, 0.02, 0.03, 0.0, 0.5, True)
+    assert val > 0 and val == val          # finite, not NaN
+
+
+def test_gk_rejects_invalid_inputs():
+    """V2: non-finite or non-positive spot/strike raise ValueError."""
+    import pytest
+    from fxrisk.options import garman_kohlhagen
+    with pytest.raises(ValueError):
+        garman_kohlhagen(float("nan"), 1.0, 0.02, 0.03, 0.1, 0.5)
+    with pytest.raises(ValueError):
+        garman_kohlhagen(-1.0, 1.0, 0.02, 0.03, 0.1, 0.5)
+    with pytest.raises(ValueError):
+        garman_kohlhagen(1.0, 1.0, 0.02, 0.03, -0.1, 0.5)
