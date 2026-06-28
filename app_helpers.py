@@ -20,15 +20,22 @@ import numpy as np
 from fxrisk.data import fetch_spot_history, to_returns, MarketDataError
 from fxrisk.market import get_market_snapshot
 
-try:
-    import streamlit as st
-    _CACHE = st.cache_data(ttl=600, show_spinner=False)   # 10-minute TTL
-except Exception:                                          # tests / no-streamlit
-    def _CACHE(func):
-        return func
-
 # Data freshness window, surfaced in the UI.
 CACHE_TTL_SECONDS = 600
+
+
+def _cache(func):
+    """
+    Apply Streamlit's data cache if Streamlit is importable, else return the
+    function unchanged (so the module also works in tests / without Streamlit).
+    Defined as a plain decorator applied per-function -- the robust pattern that
+    Streamlit Cloud always supports.
+    """
+    try:
+        import streamlit as st
+        return st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)(func)
+    except Exception:
+        return func
 
 
 def _with_retries(fn, *args, attempts: int = 3, base_delay: float = 0.6, **kwargs):
@@ -52,14 +59,14 @@ def _with_retries(fn, *args, attempts: int = 3, base_delay: float = 0.6, **kwarg
     ) from last_exc
 
 
-@_CACHE
+@_cache
 def cached_snapshot(pair: str, tenor_days: int):
     """Cached, retried market snapshot for one pair/tenor."""
     return _with_retries(get_market_snapshot, pair, tenor_days)
 
 
-@_CACHE
-def cached_spot_history(pairs: tuple[str, ...], period: str = "2y"):
+@_cache
+def cached_spot_history(pairs: tuple, period: str = "2y"):
     """Cached, retried spot history. `pairs` is a tuple so it is hashable."""
     return _with_retries(fetch_spot_history, list(pairs), period=period)
 
@@ -78,8 +85,6 @@ def factor_setup(book, snapshots: dict, history_period: str = "2y"):
     """
     pairs = book.pairs()
 
-    # Same numeraire guard as portfolio_risk: all pairs must be quote-USD, or the
-    # returns and exposures would be summed across currencies without conversion.
     non_usd = sorted({p.pair for p in book if p.quote_ccy != "USD"})
     if non_usd:
         raise ValueError(
@@ -90,7 +95,6 @@ def factor_setup(book, snapshots: dict, history_period: str = "2y"):
     rets_df = to_returns(prices)
     returns = rets_df[pairs].to_numpy()
 
-    # Net spot exposure per pair (quote-currency), provider sign.
     spots = {p.pair: snapshots[p.id].spot for p in book}
     exposure = {pr: 0.0 for pr in pairs}
     for p in book:
