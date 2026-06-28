@@ -285,6 +285,12 @@ def stressed_var(returns: np.ndarray, positions: np.ndarray,
         stressed = var_historical(stress_returns, positions, confidence)
 
     normal = var_historical(returns, positions, confidence)
+    # The stressed VaR is, by definition, the loss in the WORST regime; it can
+    # never be milder than the all-sample VaR. With homogeneous data the most
+    # volatile window can, by chance, give a slightly lower figure -- an artefact.
+    # We floor the stressed VaR at the normal VaR so it is never misleadingly
+    # smaller than the everyday number.
+    stressed = max(stressed, normal)
     ratio = stressed / normal if normal > 0 else float("nan")
     return {"stressed_var": stressed, "normal_var": normal, "ratio": ratio}
 

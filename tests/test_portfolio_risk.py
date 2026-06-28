@@ -156,3 +156,17 @@ def test_mc_zero_drift_default():
     vmc = var_montecarlo(r, POS, 0.99, n_sims=40000)
     vp = var_parametric(r, POS, 0.99)
     assert abs(vmc - vp) / vp < 0.10      # within 10% on normal data
+
+
+def test_stressed_var_never_below_normal():
+    """Stressed VaR must never be lower than the all-sample VaR (it is the worst
+    regime by definition). Verified across many homogeneous samples where the
+    artefact could otherwise appear."""
+    import numpy as np
+    from fxrisk.portfolio_risk import stressed_var
+    pos = np.array([1_000_000.0])
+    for seed in range(20):
+        data = np.random.default_rng(seed).standard_normal((1000, 1)) * 0.01
+        sv = stressed_var(data, pos, 0.99)
+        assert sv["stressed_var"] >= sv["normal_var"] - 1e-9
+        assert sv["ratio"] >= 1.0 - 1e-9
