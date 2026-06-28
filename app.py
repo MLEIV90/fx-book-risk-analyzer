@@ -1080,8 +1080,11 @@ with tab_mkt:
                        help="How much higher the stressed VaR is than the normal one.")
             st.caption("Declared limit: the stress window is the worst in ~2 years of free "
                        "history; a full implementation would fix a crisis window (e.g. 2008).")
-        except Exception:
-            st.caption("Not enough history to compute a stressed VaR for this book.")
+        except ValueError:
+            st.caption("Not enough history to identify a stress window for this book "
+                       "(needs a longer return series than is currently available).")
+        except Exception as exc:
+            st.caption(f"Stressed VaR could not be computed: {exc}")
 
         # C1: downloadable professional Excel risk report.
         st.divider()
