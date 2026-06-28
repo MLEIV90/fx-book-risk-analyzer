@@ -32,7 +32,7 @@ from fxrisk.portfolio_risk import (
 from fxrisk.book_risk import (dv01_book, liquidity_book, stress_book,
                               dv01_book_by_tenor)
 from fxrisk.limits import LimitsConfig, check_limits
-from app_helpers import snapshots_for_book, factor_setup
+from app_helpers import snapshots_for_book, factor_setup, cached_snapshot, CACHE_TTL_SECONDS
 
 st.set_page_config(page_title="FX Book Risk Analyzer", layout="wide",
                    initial_sidebar_state="expanded")
@@ -400,7 +400,7 @@ with sub_opt:
     if st.button("Price option", type="primary", key="opt_price_btn"):
         try:
             with st.spinner("Fetching spot, rates and volatility..."):
-                snap = get_market_snapshot(opair, otenor)
+                snap = cached_snapshot(opair, otenor)
                 tau = snap.tenor_years
                 # GARCH vol when available, else historical (declared fallback).
                 vol = snap.vol_garch if snap.vol_garch is not None else snap.vol_historical
@@ -564,7 +564,7 @@ with sub_opt:
             with st.spinner("Valuing option book at live rates..."):
                 ob_spots, ob_rates = {}, {}
                 for pr in option_book.pairs():
-                    s = get_market_snapshot(pr, 90)
+                    s = cached_snapshot(pr, 90)
                     ob_spots[pr] = s.spot
                     ob_rates[pr] = (s.r_base, s.r_quote)
                 greeks = option_book_greeks(option_book, ob_spots, ob_rates)
@@ -1061,5 +1061,6 @@ with tab_limits:
 st.divider()
 st.caption(
     "FX Book Risk Analyzer · Data: yfinance (spot), FRED & ECB (rate curves), "
-    "GARCH(1,1)-t (volatility) · Educational/demonstration tool, not investment "
-    "advice · Assumptions and data-quality limits are declared in each section.")
+    "GARCH(1,1)-t (volatility) · Market data is cached for 10 minutes · "
+    "Educational/demonstration tool, not investment advice · Assumptions and "
+    "data-quality limits are declared in each section.")
