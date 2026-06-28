@@ -736,6 +736,38 @@ with tab_mkt:
         st.caption("Student-t captures fat tails the normal VaR misses; EWMA weights "
                    "recent days more, so it reacts faster to the current regime. Both "
                    "are validation-grade refinements over the plain normal VaR.")
+
+        # A3: side-by-side comparison of all five VaR methods.
+        st.markdown("##### VaR methods compared")
+        methods = {
+            "Parametric": var_report.var_parametric,
+            "Historical": var_report.var_historical,
+            "Monte Carlo": var_report.var_montecarlo,
+            "EWMA": ve,
+            "Student-t": vt,
+        }
+        order = sorted(methods, key=methods.get)
+        vals = [methods[m] for m in order]
+        colors = [PLOT_ACCENT if m == "Student-t" else PLOT_MUTED for m in order]
+        fig_cmp = go.Figure(go.Bar(
+            x=vals, y=order, orientation="h",
+            marker_color=colors,
+            text=[f"{v:,.0f}" for v in vals], textposition="auto",
+            hovertemplate="%{y}: %{x:,.0f} USD<extra></extra>"))
+        fig_cmp.update_xaxes(title_text="1-day VaR (USD)")
+        st.plotly_chart(_plotly_layout(fig_cmp, height=260),
+                        use_container_width=True, config={"displayModeBar": False})
+        spread = (max(vals) - min(vals)) / min(vals) if min(vals) > 0 else 0
+        st.markdown(
+            f'<div class="interp">The five methods span <b>{min(vals):,.0f}</b> to '
+            f'<b>{max(vals):,.0f}</b> USD ({spread:.0%} apart). They disagree by '
+            f'design: <b>Parametric</b> assumes a normal distribution; '
+            f'<b>Historical</b> makes no distributional assumption; <b>Monte Carlo</b> '
+            f'simulates from the covariance; <b>EWMA</b> weights recent days more, so '
+            f'it tracks the current regime; <b>Student-t</b> models fat tails and is '
+            f'usually the most conservative. A wide spread signals fat tails or a '
+            f'shifting regime — the normal VaR alone would understate the risk.</div>',
+            unsafe_allow_html=True)
     except Exception:
         pass
     st.caption(f"1-day horizon at {confidence:.1%} confidence. Book notional ≈ "
