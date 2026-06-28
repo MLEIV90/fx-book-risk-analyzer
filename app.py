@@ -259,8 +259,8 @@ with st.sidebar:
 # --------------------------------------------------------------------------
 # Navigation: two zones -- Instruments (price/explore) and Book & Risk (manage)
 # --------------------------------------------------------------------------
-tab_home, tab_instruments, tab_bookrisk, tab_limits = st.tabs(
-    ["Overview", "Instruments", "Book & Risk", "Limitations"])
+tab_home, tab_dash, tab_instruments, tab_bookrisk, tab_limits = st.tabs(
+    ["Overview", "Dashboard", "Instruments", "Book & Risk", "Limitations"])
 
 # ============================ 0. OVERVIEW ================================
 with tab_home:
@@ -329,6 +329,90 @@ with tab_home:
                    "the ECB (EUR); volatility via GARCH(1,1)-t. Limitations are declared "
                    "in each section. Educational tool — not investment advice.")
     glossary()
+
+# ============================ DASHBOARD =================================
+with tab_dash:
+    st.subheader("Risk dashboard")
+    if book.is_empty:
+        st.info("No book loaded yet. Build a trade in **Instruments → Forward** or "
+                "click **Load example** in the sidebar — the executive summary of "
+                "your book's risk will appear here.")
+    else:
+        try:
+            with st.spinner("Summarising book risk..."):
+                d_snaps = snapshots_for_book(book)
+                d_pairs, d_returns, d_positions = factor_setup(book, d_snaps)
+                d_var = portfolio_var(d_returns, d_positions, confidence, d_pairs)
+                d_report = value_book(book)
+                d_notional = sum(abs(p.notional_base) * d_snaps[p.id].spot for p in book)
+                d_net = book.net_exposure_by_currency()
+                d_cfg = LimitsConfig(var_limit=var_limit or None,
+                                     net_exposure_limit=exp_limit or None)
+                d_lim = check_limits(d_cfg, var_value=d_var.var_historical,
+                                     net_exposure=d_net)
+
+            # Traffic-light status from the limit checks.
+            breached = [c for c in d_lim.checks if c.breached]
+            near = [c for c in d_lim.checks if not c.breached and c.utilisation >= 80]
+            if breached:
+                light, label, msg = (PLOT_RED, "BREACH",
+                    f"{len(breached)} limit(s) breached — action required.")
+            elif near:
+                light, label, msg = (PLOT_AMBER, "WATCH",
+                    f"{len(near)} limit(s) above 80% utilisation — monitor closely.")
+            elif d_lim.checks:
+                light, label, msg = ("#2E9E5B", "OK",
+                    "All limits within bounds.")
+            else:
+                light, label, msg = (PLOT_MUTED, "NO LIMITS",
+                    "No risk limits set — define them in the sidebar to enable monitoring.")
+
+            st.markdown(
+                f'<div style="display:flex;align-items:center;gap:0.8rem;'
+                f'padding:0.9rem 1.1rem;border-radius:0.6rem;'
+                f'background:{light}22;border-left:5px solid {light};margin-bottom:1rem;">'
+                f'<span style="width:0.9rem;height:0.9rem;border-radius:50%;'
+                f'background:{light};display:inline-block;"></span>'
+                f'<b style="color:{light};font-size:1.05rem;">{label}</b>'
+                f'<span style="color:#8A93A3;">· {msg}</span></div>',
+                unsafe_allow_html=True)
+
+            # Key metrics at a glance.
+            cards([
+                {"label": "Book notional (USD)", "value": f"{d_notional:,.0f}"},
+                {"label": "Book value / MtM (USD)",
+                 "value": f"{d_report.total_mtm_usd:,.0f}",
+                 "sign": "pos" if d_report.total_mtm_usd >= 0 else "neg"},
+                {"label": f"VaR · 1-day ({confidence:.0%})",
+                 "value": f"{d_var.var_historical:,.0f}", "kind": "accent"},
+                {"label": "Expected Shortfall",
+                 "value": f"{d_var.expected_shortfall:,.0f}", "kind": "warn"},
+            ])
+
+            # Limit utilisation bars.
+            if d_lim.checks:
+                st.markdown("##### Limit utilisation")
+                for c in d_lim.checks:
+                    cls = "bad" if c.breached else ("warn" if c.utilisation >= 80 else "ok")
+                    st.markdown(
+                        f'<div style="margin:0.3rem 0;"><span class="pill {cls}">'
+                        f'{c.status}</span> &nbsp; <b>{c.name}</b> &nbsp; '
+                        f'<span style="font-family:JetBrains Mono,monospace;color:#8A93A3;">'
+                        f'{c.current:,.0f} / {c.limit:,.0f} · {c.utilisation:.0f}% used'
+                        f'</span></div>', unsafe_allow_html=True)
+
+            # Net exposure by currency.
+            st.markdown("##### Net exposure by currency")
+            ncols = st.columns(max(len(d_net), 1))
+            for col, (ccy, amt) in zip(ncols, sorted(d_net.items())):
+                col.metric(ccy, f"{amt:,.0f}")
+
+            st.caption("This is the executive summary. See **Book & Risk** for the "
+                       "full VaR methods, backtests, rate/liquidity and stress detail.")
+        except MarketDataError:
+            st.error("Live market data is unavailable right now. Please try again.")
+        except Exception as exc:
+            st.error(f"Could not build the dashboard: {exc}")
 
 # Define the sub-tabs inside each zone. The existing `with tab_*:` blocks below
 # attach to these, so the two-zone nesting works without re-indenting content.
