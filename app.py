@@ -934,14 +934,16 @@ with tab_mkt:
             st.plotly_chart(_plotly_layout(fig_cmp, height=260),
                             use_container_width=True, config={"displayModeBar": False})
             spread = (max(vals) - min(vals)) / min(vals) if min(vals) > 0 else 0
+            _highest = order[-1]   # the method that is actually largest here
             st.markdown(
                 f'<div class="interp">The five methods span <b>{min(vals):,.0f}</b> to '
-                f'<b>{max(vals):,.0f}</b> USD ({spread:.0%} apart). They disagree by '
+                f'<b>{max(vals):,.0f}</b> USD ({spread:.0%} apart), with <b>{_highest}</b> '
+                f'the most conservative on this book. They disagree by '
                 f'design: <b>Parametric</b> assumes a normal distribution; '
                 f'<b>Historical</b> makes no distributional assumption; <b>Monte Carlo</b> '
                 f'simulates from the covariance; <b>EWMA</b> weights recent days more, so '
-                f'it tracks the current regime; <b>Student-t</b> models fat tails and is '
-                f'usually the most conservative. A wide spread signals fat tails or a '
+                f'it tracks the current regime; <b>Student-t</b> models fat tails and tends '
+                f'to be among the most conservative. A wide spread signals fat tails or a '
                 f'shifting regime — the normal VaR alone would understate the risk.</div>',
                 unsafe_allow_html=True)
 
@@ -1049,8 +1051,9 @@ with tab_mkt:
         fig2.update_xaxes(title_text="% of portfolio variance")
         st.plotly_chart(_plotly_layout(fig2), use_container_width=True,
                         config={"displayModeBar": False})
-        st.metric("Diversification benefit",
-                  f"{var_report.diversification_benefit:.0%}", help=HELP["div"])
+        _div = var_report.diversification_benefit
+        st.metric("Diversification benefit" if _div >= 0 else "Concentration penalty",
+                  f"{_div:.0%}", help=HELP["div"])
 
         if len(pairs) > 1:
             st.markdown("##### Correlation between factors")
@@ -1071,7 +1074,8 @@ with tab_mkt:
             sv1, sv2, sv3 = st.columns(3)
             sv1.metric("Normal-period VaR", f"{sv['normal_var']:,.0f}")
             sv2.metric("Stressed VaR", f"{sv['stressed_var']:,.0f}")
-            sv3.metric("Stress multiplier", f"{sv['ratio']:.2f}×",
+            sv3.metric("Stress multiplier",
+                       f"{sv['ratio']:.2f}×" if sv['ratio'] == sv['ratio'] else "n/a",
                        help="How much higher the stressed VaR is than the normal one.")
             st.caption("Declared limit: the stress window is the worst in ~2 years of free "
                        "history; a full implementation would fix a crisis window (e.g. 2008).")
