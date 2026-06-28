@@ -255,6 +255,21 @@ with st.sidebar:
     confidence = st.select_slider("Confidence level", [0.95, 0.975, 0.99], value=0.99,
                                   help=HELP["confidence"])
 
+    # H4: persistent at-a-glance status, visible on every screen.
+    st.divider()
+    st.header("Book status")
+    if book.is_empty:
+        st.caption("No book loaded.")
+    else:
+        n_pos = len(book)
+        n_opt = len(option_book)
+        st.metric("Positions", f"{n_pos} forward" + ("s" if n_pos != 1 else "")
+                  + (f" · {n_opt} option" + ("s" if n_opt != 1 else "") if n_opt else ""))
+        _net = book.net_exposure_by_currency()
+        st.caption("Net exposure: " + " · ".join(
+            f"{ccy} {amt:,.0f}" for ccy, amt in sorted(_net.items())))
+        st.caption("Full risk numbers in **Dashboard** and **Book & Risk**.")
+
 
 # --------------------------------------------------------------------------
 # Navigation: two zones -- Instruments (price/explore) and Book & Risk (manage)
@@ -403,9 +418,20 @@ with tab_dash:
 
             # Net exposure by currency.
             st.markdown("##### Net exposure by currency")
-            ncols = st.columns(max(len(d_net), 1))
-            for col, (ccy, amt) in zip(ncols, sorted(d_net.items())):
-                col.metric(ccy, f"{amt:,.0f}")
+            _items = sorted(d_net.items())
+            _ccys = [c for c, _ in _items]
+            _amts = [a for _, a in _items]
+            _bar_colors = ["#2E9E5B" if a >= 0 else PLOT_RED for a in _amts]
+            fig_exp = go.Figure(go.Bar(
+                x=_amts, y=_ccys, orientation="h", marker_color=_bar_colors,
+                text=[f"{a:,.0f}" for a in _amts], textposition="auto",
+                hovertemplate="%{y}: %{x:,.0f}<extra></extra>"))
+            fig_exp.add_vline(x=0, line_color=PLOT_GRID)
+            fig_exp.update_xaxes(title_text="Net exposure (currency units)")
+            st.plotly_chart(_plotly_layout(fig_exp, height=max(160, 60 * len(_ccys))),
+                            use_container_width=True, config={"displayModeBar": False})
+            st.caption("Green = the book is long that currency, red = short. This is the "
+                       "directional FX position the desk carries.")
 
             st.caption("This is the executive summary. See **Book & Risk** for the "
                        "full VaR methods, backtests, rate/liquidity and stress detail.")
@@ -424,8 +450,8 @@ with tab_instruments:
 with tab_bookrisk:
     st.caption("The book holds every instrument; the analysis below is for the "
                "whole book.")
-    tab_book, tab_val, tab_mkt, tab_rls, tab_client = st.tabs(
-        ["Book", "Valuation", "Market risk", "Rates & Liquidity", "Client"])
+    tab_book, tab_val, tab_mkt, tab_rls = st.tabs(
+        ["Book", "Valuation", "Market risk", "Rates & Liquidity"])
 
 # ===================== INSTRUMENTS · FORWARD =============================
 with sub_fwd:
@@ -756,11 +782,25 @@ with tab_book:
             col.metric(f"Net {ccy}", f"{amt:,.0f}",
                        help=f"Gross (ignoring netting): {gross.get(ccy, 0):,.0f} {ccy}")
 
+        st.divider()
+        with st.expander("Client view — what each trade looked like to the client"):
+            st.caption("The derived, secondary side: the mirror of each provider "
+                       "position, as the client who hedged would see it.")
+            st.dataframe(
+                [{"#": id_to_num[p.id], "Pair": p.pair,
+                  "Client": ("Buys " + p.base_ccy) if (not p.long_base)
+                            else ("Sells " + p.base_ccy),
+                  "Notional": f"{p.notional_base:,.0f}",
+                  "Rate quoted": f"{p.strike:.4f}",
+                  "Tenor (days)": p.tenor_days} for p in book],
+                hide_index=True, use_container_width=True)
+            st.caption("The rate quoted already includes the provider's spread — the "
+                       "provider's revenue and the client's cost of certainty.")
+
 # Empty-book guard for analysis tabs.
 if book.is_empty:
     for t, msg in [(tab_val, "value the book"), (tab_mkt, "measure market risk"),
-                   (tab_rls, "see rate, liquidity and stress"),
-                   (tab_client, "see the client view")]:
+                   (tab_rls, "see rate, liquidity and stress")]:
         with t:
             st.info(f"Add positions first to {msg}. Build a forward in Instruments → "
                     f"Forward, or load the example book.")
@@ -832,109 +872,100 @@ with tab_mkt:
     st.caption("How much the book could lose on a bad day, whether that number is "
                "trustworthy, and where the risk comes from.")
 
-    cards([
-        {"label": "VaR · parametric", "value": f"{var_report.var_parametric:,.0f}",
-         "sub": f"{var_report.var_parametric / book_notional_usd:.2%} of book"},
-        {"label": "VaR · historical", "value": f"{var_report.var_historical:,.0f}",
-         "sub": f"{var_report.var_historical / book_notional_usd:.2%} of book",
-         "kind": "accent"},
-        {"label": "VaR · Monte Carlo", "value": f"{var_report.var_montecarlo:,.0f}",
-         "sub": f"{var_report.var_montecarlo / book_notional_usd:.2%} of book"},
-        {"label": "Expected Shortfall", "value": f"{var_report.expected_shortfall:,.0f}",
-         "sub": f"{var_report.expected_shortfall / book_notional_usd:.2%} of book",
-         "kind": "warn"},
-    ])
-
-    # Fat-tail and regime-aware VaR (audit improvements B1, B2).
+    # --- Shared computations (done once, used across the sub-tabs below) ---
     try:
         vt = var_student_t(returns, positions, confidence)
         ve = var_ewma(returns, positions, confidence)
-        cards([
-            {"label": "VaR · Student-t", "value": f"{vt:,.0f}",
-             "sub": "fat-tailed", "kind": "accent"},
-            {"label": "VaR · EWMA", "value": f"{ve:,.0f}",
-             "sub": "regime-weighted (λ=0.94)"},
-        ])
-        st.caption("Student-t captures fat tails the normal VaR misses; EWMA weights "
-                   "recent days more, so it reacts faster to the current regime. Both "
-                   "are validation-grade refinements over the plain normal VaR.")
-
-        # A3: side-by-side comparison of all five VaR methods.
-        st.markdown("##### VaR methods compared")
-        methods = {
-            "Parametric": var_report.var_parametric,
-            "Historical": var_report.var_historical,
-            "Monte Carlo": var_report.var_montecarlo,
-            "EWMA": ve,
-            "Student-t": vt,
-        }
-        order = sorted(methods, key=methods.get)
-        vals = [methods[m] for m in order]
-        colors = [PLOT_ACCENT if m == "Student-t" else PLOT_MUTED for m in order]
-        fig_cmp = go.Figure(go.Bar(
-            x=vals, y=order, orientation="h",
-            marker_color=colors,
-            text=[f"{v:,.0f}" for v in vals], textposition="auto",
-            hovertemplate="%{y}: %{x:,.0f} USD<extra></extra>"))
-        fig_cmp.update_xaxes(title_text="1-day VaR (USD)")
-        st.plotly_chart(_plotly_layout(fig_cmp, height=260),
-                        use_container_width=True, config={"displayModeBar": False})
-        spread = (max(vals) - min(vals)) / min(vals) if min(vals) > 0 else 0
-        st.markdown(
-            f'<div class="interp">The five methods span <b>{min(vals):,.0f}</b> to '
-            f'<b>{max(vals):,.0f}</b> USD ({spread:.0%} apart). They disagree by '
-            f'design: <b>Parametric</b> assumes a normal distribution; '
-            f'<b>Historical</b> makes no distributional assumption; <b>Monte Carlo</b> '
-            f'simulates from the covariance; <b>EWMA</b> weights recent days more, so '
-            f'it tracks the current regime; <b>Student-t</b> models fat tails and is '
-            f'usually the most conservative. A wide spread signals fat tails or a '
-            f'shifting regime — the normal VaR alone would understate the risk.</div>',
-            unsafe_allow_html=True)
     except Exception:
-        pass
-    st.caption(f"1-day horizon at {confidence:.1%} confidence. Book notional ≈ "
-               f"{book_notional_usd:,.0f} USD. The three methods should broadly agree; "
-               f"differences reveal how fat-tailed the data is.")
-    st.markdown(
-        '<div class="interp"><b>Scope:</b> this is a <b>spot VaR</b> — it measures '
-        'exchange-rate risk only. Interest-rate risk is reported separately as DV01 '
-        '(Rate / Liquidity / Stress tab); the two are not added into one number, '
-        'which would need a joint spot-rate covariance model.</div>',
-        unsafe_allow_html=True)
-
-    # 10-day regulatory horizon.
-    st.markdown("##### 10-day VaR (regulatory horizon)")
-    h1, h2 = st.columns(2)
-    h1.metric("VaR historical · 10-day", f"{var_report.var_historical_10d:,.0f}",
-              help="1-day VaR scaled by √10 (Basel square-root-of-time rule).")
-    h2.metric("Expected Shortfall · 10-day", f"{var_report.expected_shortfall_10d:,.0f}")
-    st.caption("Basel requires a 10-day horizon (the assumed time to unwind positions "
-               "under stress). Scaled by √10, which assumes i.i.d. returns — a declared "
-               "convention.")
-
-    # Limits with a suggested default shown to the user.
+        vt = ve = None
     suggested_var = var_report.var_historical * 2
-    st.markdown("##### Limit control")
-    if not var_limit and not exp_limit:
-        st.caption(f"No limits set. Tip: a common starting VaR limit is about 2× the "
-                   f"current VaR (~{suggested_var:,.0f} USD). Set it in the sidebar to "
-                   f"see the green/red check here.")
     cfg = LimitsConfig(var_limit=var_limit or None,
                        net_exposure_limit=exp_limit or None)
     lim = check_limits(cfg, var_value=var_report.var_historical,
                        net_exposure=book.net_exposure_by_currency())
-    for c in lim.checks:
-        cls = "bad" if c.breached else ("warn" if c.utilisation >= 80 else "ok")
+
+    mkt_var, mkt_bt, mkt_stress = st.tabs(
+        ["VaR & methods", "Backtesting", "Stress & contribution"])
+
+    # ============== Sub-tab 1: VaR & methods ==============
+    with mkt_var:
+        cards([
+            {"label": "VaR · parametric", "value": f"{var_report.var_parametric:,.0f}",
+             "sub": f"{var_report.var_parametric / book_notional_usd:.2%} of book"},
+            {"label": "VaR · historical", "value": f"{var_report.var_historical:,.0f}",
+             "sub": f"{var_report.var_historical / book_notional_usd:.2%} of book",
+             "kind": "accent"},
+            {"label": "VaR · Monte Carlo", "value": f"{var_report.var_montecarlo:,.0f}",
+             "sub": f"{var_report.var_montecarlo / book_notional_usd:.2%} of book"},
+            {"label": "Expected Shortfall", "value": f"{var_report.expected_shortfall:,.0f}",
+             "sub": f"{var_report.expected_shortfall / book_notional_usd:.2%} of book",
+             "kind": "warn"},
+        ])
+
+        if vt is not None and ve is not None:
+            cards([
+                {"label": "VaR · Student-t", "value": f"{vt:,.0f}",
+                 "sub": "fat-tailed", "kind": "accent"},
+                {"label": "VaR · EWMA", "value": f"{ve:,.0f}",
+                 "sub": "regime-weighted (λ=0.94)"},
+            ])
+            st.caption("Student-t captures fat tails the normal VaR misses; EWMA weights "
+                       "recent days more, so it reacts faster to the current regime. Both "
+                       "are validation-grade refinements over the plain normal VaR.")
+
+            # A3: side-by-side comparison of all five VaR methods.
+            st.markdown("##### VaR methods compared")
+            methods = {
+                "Parametric": var_report.var_parametric,
+                "Historical": var_report.var_historical,
+                "Monte Carlo": var_report.var_montecarlo,
+                "EWMA": ve,
+                "Student-t": vt,
+            }
+            order = sorted(methods, key=methods.get)
+            vals = [methods[m] for m in order]
+            colors = [PLOT_ACCENT if m == "Student-t" else PLOT_MUTED for m in order]
+            fig_cmp = go.Figure(go.Bar(
+                x=vals, y=order, orientation="h",
+                marker_color=colors,
+                text=[f"{v:,.0f}" for v in vals], textposition="auto",
+                hovertemplate="%{y}: %{x:,.0f} USD<extra></extra>"))
+            fig_cmp.update_xaxes(title_text="1-day VaR (USD)")
+            st.plotly_chart(_plotly_layout(fig_cmp, height=260),
+                            use_container_width=True, config={"displayModeBar": False})
+            spread = (max(vals) - min(vals)) / min(vals) if min(vals) > 0 else 0
+            st.markdown(
+                f'<div class="interp">The five methods span <b>{min(vals):,.0f}</b> to '
+                f'<b>{max(vals):,.0f}</b> USD ({spread:.0%} apart). They disagree by '
+                f'design: <b>Parametric</b> assumes a normal distribution; '
+                f'<b>Historical</b> makes no distributional assumption; <b>Monte Carlo</b> '
+                f'simulates from the covariance; <b>EWMA</b> weights recent days more, so '
+                f'it tracks the current regime; <b>Student-t</b> models fat tails and is '
+                f'usually the most conservative. A wide spread signals fat tails or a '
+                f'shifting regime — the normal VaR alone would understate the risk.</div>',
+                unsafe_allow_html=True)
+
+        st.caption(f"1-day horizon at {confidence:.1%} confidence. Book notional ≈ "
+                   f"{book_notional_usd:,.0f} USD. The three methods should broadly agree; "
+                   f"differences reveal how fat-tailed the data is.")
         st.markdown(
-            f'<div style="margin:0.3rem 0;"><span class="pill {cls}">{c.status}</span> '
-            f'&nbsp; <b>{c.name}</b> &nbsp; '
-            f'<span style="font-family:JetBrains Mono,monospace; color:#8A93A3;">'
-            f'{c.current:,.0f} / {c.limit:,.0f} · {c.utilisation:.0f}% used</span></div>',
+            '<div class="interp"><b>Scope:</b> this is a <b>spot VaR</b> — it measures '
+            'exchange-rate risk only. Interest-rate risk is reported separately as DV01 '
+            '(Rate / Liquidity / Stress tab); the two are not added into one number, '
+            'which would need a joint spot-rate covariance model.</div>',
             unsafe_allow_html=True)
 
-    st.write("")
-    g1, g2 = st.columns(2)
-    with g1:
+        # 10-day regulatory horizon.
+        st.markdown("##### 10-day VaR (regulatory horizon)")
+        h1, h2 = st.columns(2)
+        h1.metric("VaR historical · 10-day", f"{var_report.var_historical_10d:,.0f}",
+                  help="1-day VaR scaled by √10 (Basel square-root-of-time rule).")
+        h2.metric("Expected Shortfall · 10-day", f"{var_report.expected_shortfall_10d:,.0f}")
+        st.caption("Basel requires a 10-day horizon (the assumed time to unwind positions "
+                   "under stress). Scaled by √10, which assumes i.i.d. returns — a declared "
+                   "convention.")
+
+        # P&L distribution.
         st.markdown("##### P&L distribution")
         st.caption("Each bar is a day's simulated profit/loss. The lines mark the VaR "
                    "and ES — losses to their left are the bad tail.")
@@ -952,7 +983,61 @@ with tab_mkt:
         fig.update_yaxes(title_text="Days")
         st.plotly_chart(_plotly_layout(fig), use_container_width=True,
                         config={"displayModeBar": False})
-    with g2:
+
+    # ============== Sub-tab 2: Backtesting ==============
+    with mkt_bt:
+        st.markdown("##### Backtesting (rolling, out-of-sample)")
+        st.caption("The proper validation: the VaR is re-estimated each day from a trailing "
+                   "window and tested against the NEXT day's loss — how a model is checked "
+                   "in production, not with a constant VaR.")
+        try:
+            kup = rolling_backtest(returns, positions, confidence, window=250)
+            method_note = ("Rolling 250-day window, re-estimated daily. ")
+        except ValueError:
+            pnl_bt = returns @ positions
+            kup = kupiec_backtest(pnl_bt, np.full(len(pnl_bt), var_report.var_historical),
+                                  confidence)
+            method_note = ("Constant-VaR test (history too short for a rolling window). ")
+        k1, k2, k3 = st.columns(3)
+        k1.metric("Days tested", f"{kup.observations}",
+                  help="Out-of-sample days the model was checked on.")
+        k2.metric("Exceptions", f"{kup.exceptions}",
+                  help=f"Days the loss exceeded the VaR. Expected ~{kup.expected_exceptions:.0f}.")
+        k3.metric("Model", "PASS" if kup.passed else "REVIEW",
+                  help=f"Kupiec p-value {kup.p_value:.2f}. Above 0.05 = not rejected.")
+        st.markdown(
+            f'<div class="interp">{method_note}The VaR was breached <b>{kup.exceptions}</b> '
+            f'times in {kup.observations} tested days (expected ~{kup.expected_exceptions:.0f}). '
+            f'The Kupiec proportion-of-failures test {"does not reject" if kup.passed else "rejects"} '
+            f'the model (p-value {kup.p_value:.2f}).</div>', unsafe_allow_html=True)
+
+        pnl_full = returns @ positions
+        chr_res = christoffersen_independence(
+            pnl_full, np.full(len(pnl_full), var_report.var_historical))
+        st.markdown(
+            f'<div class="interp"><b>Independence (Christoffersen):</b> '
+            f'{"exceptions are not clustered — good" if chr_res["independent"] else "exceptions cluster — the model may be slow to react"} '
+            f'(p-value {chr_res["p_value"]:.2f}). Kupiec checks how many breaches occur; '
+            f'this checks whether they bunch together, which a count alone would miss.'
+            f'</div>', unsafe_allow_html=True)
+
+    # ============== Sub-tab 3: Stress & contribution ==============
+    with mkt_stress:
+        st.markdown("##### Limit control")
+        if not var_limit and not exp_limit:
+            st.caption(f"No limits set. Tip: a common starting VaR limit is about 2× the "
+                       f"current VaR (~{suggested_var:,.0f} USD). Set it in the sidebar to "
+                       f"see the green/red check here.")
+        for c in lim.checks:
+            cls = "bad" if c.breached else ("warn" if c.utilisation >= 80 else "ok")
+            st.markdown(
+                f'<div style="margin:0.3rem 0;"><span class="pill {cls}">{c.status}</span> '
+                f'&nbsp; <b>{c.name}</b> &nbsp; '
+                f'<span style="font-family:JetBrains Mono,monospace; color:#8A93A3;">'
+                f'{c.current:,.0f} / {c.limit:,.0f} · {c.utilisation:.0f}% used</span></div>',
+                unsafe_allow_html=True)
+
+        st.write("")
         st.markdown("##### Risk contribution by factor")
         st.caption("How much of the total risk each currency pair is responsible for. "
                    "This is where the risk comes from.")
@@ -964,124 +1049,83 @@ with tab_mkt:
         fig2.update_xaxes(title_text="% of portfolio variance")
         st.plotly_chart(_plotly_layout(fig2), use_container_width=True,
                         config={"displayModeBar": False})
+        st.metric("Diversification benefit",
+                  f"{var_report.diversification_benefit:.0%}", help=HELP["div"])
 
-    st.metric("Diversification benefit",
-              f"{var_report.diversification_benefit:.0%}", help=HELP["div"])
+        if len(pairs) > 1:
+            st.markdown("##### Correlation between factors")
+            st.caption("How closely the pairs move together. High correlation means little "
+                       "diversification — which explains the benefit figure above.")
+            corr = np.corrcoef(returns, rowvar=False)
+            st.dataframe(
+                {pairs[j]: {pairs[i]: round(float(corr[i, j]), 2)
+                            for i in range(len(pairs))} for j in range(len(pairs))},
+                use_container_width=True)
 
-    if len(pairs) > 1:
-        st.markdown("##### Correlation between factors")
-        st.caption("How closely the pairs move together. High correlation means little "
-                   "diversification — which explains the benefit figure above.")
-        corr = np.corrcoef(returns, rowvar=False)
-        st.dataframe(
-            {pairs[j]: {pairs[i]: round(float(corr[i, j]), 2)
-                        for i in range(len(pairs))} for j in range(len(pairs))},
-            use_container_width=True)
+        st.markdown("##### Stressed VaR")
+        st.caption("The VaR recalibrated to the most volatile period in the available "
+                   "history — 'how much would we lose if markets behaved like their worst "
+                   "observed regime', as Basel requires.")
+        try:
+            sv = stressed_var(returns, positions, confidence)
+            sv1, sv2, sv3 = st.columns(3)
+            sv1.metric("Normal-period VaR", f"{sv['normal_var']:,.0f}")
+            sv2.metric("Stressed VaR", f"{sv['stressed_var']:,.0f}")
+            sv3.metric("Stress multiplier", f"{sv['ratio']:.2f}×",
+                       help="How much higher the stressed VaR is than the normal one.")
+            st.caption("Declared limit: the stress window is the worst in ~2 years of free "
+                       "history; a full implementation would fix a crisis window (e.g. 2008).")
+        except Exception:
+            st.caption("Not enough history to compute a stressed VaR for this book.")
 
-    st.markdown("##### Stressed VaR")
-    st.caption("The VaR recalibrated to the most volatile period in the available "
-               "history — 'how much would we lose if markets behaved like their worst "
-               "observed regime', as Basel requires.")
-    try:
-        sv = stressed_var(returns, positions, confidence)
-        sv1, sv2, sv3 = st.columns(3)
-        sv1.metric("Normal-period VaR", f"{sv['normal_var']:,.0f}")
-        sv2.metric("Stressed VaR", f"{sv['stressed_var']:,.0f}")
-        sv3.metric("Stress multiplier", f"{sv['ratio']:.2f}×",
-                   help="How much higher the stressed VaR is than the normal one.")
-        st.caption("Declared limit: the stress window is the worst in ~2 years of free "
-                   "history; a full implementation would fix a crisis window (e.g. 2008).")
-    except Exception:
-        st.caption("Not enough history to compute a stressed VaR for this book.")
-
-    st.markdown("##### Backtesting (rolling, out-of-sample)")
-    st.caption("The proper validation: the VaR is re-estimated each day from a trailing "
-               "window and tested against the NEXT day's loss — how a model is checked "
-               "in production, not with a constant VaR.")
-    try:
-        kup = rolling_backtest(returns, positions, confidence, window=250)
-        method_note = ("Rolling 250-day window, re-estimated daily. ")
-    except ValueError:
-        # Fall back to the simple constant-VaR test if history is too short.
-        pnl = returns @ positions
-        kup = kupiec_backtest(pnl, np.full(len(pnl), var_report.var_historical),
-                              confidence)
-        method_note = ("Constant-VaR test (history too short for a rolling window). ")
-    k1, k2, k3 = st.columns(3)
-    k1.metric("Days tested", f"{kup.observations}",
-              help="Out-of-sample days the model was checked on.")
-    k2.metric("Exceptions", f"{kup.exceptions}",
-              help=f"Days the loss exceeded the VaR. Expected ~{kup.expected_exceptions:.0f}.")
-    k3.metric("Model", "PASS" if kup.passed else "REVIEW",
-              help=f"Kupiec p-value {kup.p_value:.2f}. Above 0.05 = not rejected.")
-    st.markdown(
-        f'<div class="interp">{method_note}The VaR was breached <b>{kup.exceptions}</b> '
-        f'times in {kup.observations} tested days (expected ~{kup.expected_exceptions:.0f}). '
-        f'The Kupiec proportion-of-failures test {"does not reject" if kup.passed else "rejects"} '
-        f'the model (p-value {kup.p_value:.2f}).</div>', unsafe_allow_html=True)
-
-    # Christoffersen independence test (audit improvement B5).
-    pnl_full = returns @ positions
-    chr_res = christoffersen_independence(
-        pnl_full, np.full(len(pnl_full), var_report.var_historical))
-    st.markdown(
-        f'<div class="interp"><b>Independence (Christoffersen):</b> '
-        f'{"exceptions are not clustered — good" if chr_res["independent"] else "exceptions cluster — the model may be slow to react"} '
-        f'(p-value {chr_res["p_value"]:.2f}). Kupiec checks how many breaches occur; '
-        f'this checks whether they bunch together, which a count alone would miss.'
-        f'</div>', unsafe_allow_html=True)
-
-    # C1: downloadable professional Excel risk report.
-    st.divider()
-    st.markdown("##### Export")
-    st.caption("Download a formatted Excel risk report (summary, positions, risk "
-               "detail) — the kind of file a treasury desk would circulate.")
-    try:
-        from report_export import build_excel_report
-        from fxrisk.book_risk import (dv01_book as _dv01, liquidity_book as _liq,
-                                       stress_book as _stress,
-                                       dv01_book_by_tenor as _krd)
-        # Assemble report inputs from already-computed risk objects.
-        _vt = var_student_t(returns, positions, confidence)
-        _ve = var_ewma(returns, positions, confidence)
-        _rows = []
-        for p in book:
-            snap = snapshots[p.id]
+        # C1: downloadable professional Excel risk report.
+        st.divider()
+        st.markdown("##### Export")
+        st.caption("Download a formatted Excel risk report (summary, positions, risk "
+                   "detail) — the kind of file a treasury desk would circulate.")
+        try:
+            from report_export import build_excel_report
+            from fxrisk.book_risk import (dv01_book as _dv01, liquidity_book as _liq,
+                                           stress_book as _stress,
+                                           dv01_book_by_tenor as _krd)
             from fxrisk.book_analytics import value_position_from_snapshot
-            mtm = value_position_from_snapshot(p, snap).mtm_quote
-            _rows.append({
-                "pair": p.pair,
-                "side": ("Provider sells " + p.base_ccy) if (not p.long_base)
-                        else ("Provider buys " + p.base_ccy),
-                "notional": p.notional_base, "rate": p.strike,
-                "tenor": p.tenor_days, "mtm": mtm})
-        _summary = {
-            "notional": book_notional_usd, "book_value": report.total_mtm_usd,
-            "confidence": confidence,
-            "var_parametric": var_report.var_parametric,
-            "var_historical": var_report.var_historical,
-            "var_montecarlo": var_report.var_montecarlo,
-            "var_ewma": _ve, "var_student_t": _vt,
-            "expected_shortfall": var_report.expected_shortfall,
-            "limits": [{"label": c.name, "status": c.status,
-                        "ok": not c.breached} for c in lim.checks],
-        }
-        _dvc, _ = _dv01(book, snapshots)
-        _detail = {
-            "dv01_by_ccy": _dvc,
-            "dv01_by_tenor": _krd(book, snapshots),
-            "liquidity": _liq(book, snapshots, confidence, returns=returns,
-                              positions=positions),
-            "stress": _stress(book, snapshots, var_report.var_historical),
-        }
-        xlsx_bytes = build_excel_report(book_rows=_rows, summary=_summary,
-                                        risk_detail=_detail)
-        st.download_button(
-            "Download Excel risk report", data=xlsx_bytes,
-            file_name="fx_book_risk_report.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-    except Exception as exc:
-        st.caption(f"Report export unavailable: {exc}")
+            _rows = []
+            for p in book:
+                snap = snapshots[p.id]
+                mtm = value_position_from_snapshot(p, snap).mtm_quote
+                _rows.append({
+                    "pair": p.pair,
+                    "side": ("Provider sells " + p.base_ccy) if (not p.long_base)
+                            else ("Provider buys " + p.base_ccy),
+                    "notional": p.notional_base, "rate": p.strike,
+                    "tenor": p.tenor_days, "mtm": mtm})
+            _summary = {
+                "notional": book_notional_usd, "book_value": report.total_mtm_usd,
+                "confidence": confidence,
+                "var_parametric": var_report.var_parametric,
+                "var_historical": var_report.var_historical,
+                "var_montecarlo": var_report.var_montecarlo,
+                "var_ewma": ve, "var_student_t": vt,
+                "expected_shortfall": var_report.expected_shortfall,
+                "limits": [{"label": c.name, "status": c.status,
+                            "ok": not c.breached} for c in lim.checks],
+            }
+            _dvc, _ = _dv01(book, snapshots)
+            _detail = {
+                "dv01_by_ccy": _dvc,
+                "dv01_by_tenor": _krd(book, snapshots),
+                "liquidity": _liq(book, snapshots, confidence, returns=returns,
+                                  positions=positions),
+                "stress": _stress(book, snapshots, var_report.var_historical),
+            }
+            xlsx_bytes = build_excel_report(book_rows=_rows, summary=_summary,
+                                            risk_detail=_detail)
+            st.download_button(
+                "Download Excel risk report", data=xlsx_bytes,
+                file_name="fx_book_risk_report.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        except Exception as exc:
+            st.caption(f"Report export unavailable: {exc}")
 
 # ==================== 4. RATE / LIQUIDITY / STRESS ======================
 with tab_rls:
@@ -1139,20 +1183,6 @@ with tab_rls:
         f'not capture.</div>', unsafe_allow_html=True)
 
 # ============================ 5. CLIENT =================================
-with tab_client:
-    st.subheader("Client view")
-    st.caption("The derived, secondary side: what each booked trade looked like to the "
-               "client who hedged.")
-    id_to_num = {p.id: f"#{i+1:03d}" for i, p in enumerate(book)}
-    st.dataframe(
-        [{"#": id_to_num[p.id], "Pair": p.pair,
-          "Client": ("Buys " + p.base_ccy) if (not p.long_base) else ("Sells " + p.base_ccy),
-          "Notional": f"{p.notional_base:,.0f}", "Rate quoted": f"{p.strike:.4f}",
-          "Tenor (days)": p.tenor_days} for p in book],
-        hide_index=True, use_container_width=True)
-    st.caption("The rate quoted already includes the provider's spread — the provider's "
-               "revenue and the client's cost of certainty.")
-
 # ============================ LIMITATIONS ================================
 with tab_limits:
     st.subheader("Limitations & scope")
