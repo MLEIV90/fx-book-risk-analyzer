@@ -337,7 +337,7 @@ def var_student_t(returns: np.ndarray, positions: np.ndarray,
     except Exception:
         nu = 5.0
     q = student_t.ppf(1.0 - confidence, df=nu)           # negative tail quantile
-    return -(mu + sigma * q)
+    return max(-(mu + sigma * q), 0.0)                    # VaR is non-negative
 
 
 def christoffersen_independence(pnl: np.ndarray, var_series: np.ndarray

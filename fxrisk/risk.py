@@ -129,7 +129,10 @@ def var_historical(returns: np.ndarray, positions: np.ndarray,
     historical scenario, then read the empirical percentile of the loss side.
     """
     pnl = _pnl_vector(returns, positions)
-    return -np.percentile(pnl, (1.0 - confidence) * 100.0)
+    # VaR is a non-negative loss magnitude. If the loss-side percentile is itself
+    # a gain (e.g. a strongly trending sample), the floor is zero: there is no
+    # loss at this confidence. This is the standard convention.
+    return max(-np.percentile(pnl, (1.0 - confidence) * 100.0), 0.0)
 
 
 def var_montecarlo(returns: np.ndarray, positions: np.ndarray,

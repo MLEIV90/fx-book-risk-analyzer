@@ -170,3 +170,12 @@ def test_stressed_var_never_below_normal():
         sv = stressed_var(data, pos, 0.99)
         assert sv["stressed_var"] >= sv["normal_var"] - 1e-9
         assert sv["ratio"] >= 1.0 - 1e-9
+
+
+def test_student_t_var_non_negative_on_trending_data():
+    """Student-t VaR floors at zero on strongly trending data."""
+    import numpy as np
+    from fxrisk.portfolio_risk import var_student_t
+    pos = np.array([1_000_000.0])
+    bull = np.random.default_rng(0).standard_normal((500, 1)) * 0.003 + 0.01
+    assert var_student_t(bull, pos, 0.99) >= 0.0

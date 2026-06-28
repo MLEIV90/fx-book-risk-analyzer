@@ -823,6 +823,7 @@ except Exception as exc:
     st.stop()
 
 book_notional_usd = sum(abs(p.notional_base) * snapshots[p.id].spot for p in book)
+book_notional_usd = book_notional_usd or 1.0   # guard the VaR-as-%-of-book divisor
 
 # ============================ 2. VALUATION ================================
 with tab_val:

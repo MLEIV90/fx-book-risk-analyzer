@@ -95,3 +95,13 @@ def test_var_parametric_single_point_no_warning():
         warnings.simplefilter("error")
         v = var_parametric(np.array([[0.01]]), np.array([1e6]), 0.99)
     assert v == 0.0
+
+
+def test_var_non_negative_on_trending_data():
+    """VaR must never be negative, even on strongly positive-trending data where
+    the loss-side percentile is itself a gain (it floors at zero)."""
+    import numpy as np
+    from fxrisk.risk import var_historical
+    pos = np.array([1_000_000.0])
+    bull = np.random.default_rng(0).standard_normal((500, 1)) * 0.003 + 0.01
+    assert var_historical(bull, pos, 0.99) >= 0.0
