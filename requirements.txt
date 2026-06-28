@@ -7,3 +7,4 @@ plotly>=5.20
 yfinance>=0.2.40
 arch>=7.0
 pandas-datareader>=0.10
+xlsxwriter>=3.1

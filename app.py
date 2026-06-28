@@ -947,6 +947,58 @@ with tab_mkt:
         f'this checks whether they bunch together, which a count alone would miss.'
         f'</div>', unsafe_allow_html=True)
 
+    # C1: downloadable professional Excel risk report.
+    st.divider()
+    st.markdown("##### Export")
+    st.caption("Download a formatted Excel risk report (summary, positions, risk "
+               "detail) — the kind of file a treasury desk would circulate.")
+    try:
+        from report_export import build_excel_report
+        from fxrisk.book_risk import (dv01_book as _dv01, liquidity_book as _liq,
+                                       stress_book as _stress,
+                                       dv01_book_by_tenor as _krd)
+        # Assemble report inputs from already-computed risk objects.
+        _vt = var_student_t(returns, positions, confidence)
+        _ve = var_ewma(returns, positions, confidence)
+        _rows = []
+        for p in book:
+            snap = snapshots[p.id]
+            from fxrisk.book_analytics import value_position_from_snapshot
+            mtm = value_position_from_snapshot(p, snap).mtm_quote
+            _rows.append({
+                "pair": p.pair,
+                "side": ("Provider sells " + p.base_ccy) if (not p.long_base)
+                        else ("Provider buys " + p.base_ccy),
+                "notional": p.notional_base, "rate": p.strike,
+                "tenor": p.tenor_days, "mtm": mtm})
+        _summary = {
+            "notional": book_notional_usd, "book_value": report.total_mtm_usd,
+            "confidence": confidence,
+            "var_parametric": var_report.var_parametric,
+            "var_historical": var_report.var_historical,
+            "var_montecarlo": var_report.var_montecarlo,
+            "var_ewma": _ve, "var_student_t": _vt,
+            "expected_shortfall": var_report.expected_shortfall,
+            "limits": [{"label": c.name, "status": c.status,
+                        "ok": not c.breached} for c in lim.checks],
+        }
+        _dvc, _ = _dv01(book, snapshots)
+        _detail = {
+            "dv01_by_ccy": _dvc,
+            "dv01_by_tenor": _krd(book, snapshots),
+            "liquidity": _liq(book, snapshots, confidence, returns=returns,
+                              positions=positions),
+            "stress": _stress(book, snapshots, var_report.var_historical),
+        }
+        xlsx_bytes = build_excel_report(book_rows=_rows, summary=_summary,
+                                        risk_detail=_detail)
+        st.download_button(
+            "Download Excel risk report", data=xlsx_bytes,
+            file_name="fx_book_risk_report.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    except Exception as exc:
+        st.caption(f"Report export unavailable: {exc}")
+
 # ==================== 4. RATE / LIQUIDITY / STRESS ======================
 with tab_rls:
     st.subheader("Rate risk, liquidity and stress")
