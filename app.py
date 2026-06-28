@@ -1116,7 +1116,8 @@ with tab_mkt:
                 "dv01_by_tenor": _krd(book, snapshots),
                 "liquidity": _liq(book, snapshots, confidence, returns=returns,
                                   positions=positions),
-                "stress": _stress(book, snapshots, var_report.var_historical),
+                "stress": {n: r["pnl"] for n, r in
+                           _stress(book, snapshots, var_report.var_historical).items()},
             }
             xlsx_bytes = build_excel_report(book_rows=_rows, summary=_summary,
                                             risk_detail=_detail)
@@ -1169,18 +1170,34 @@ with tab_rls:
     st.divider()
     st.markdown("##### Stress testing")
     st.caption("Each row applies the real market moves of a past crisis to today's "
-               "book. 'x VaR' shows how many times bigger the loss is than a normal-day VaR.")
+               "book. A positive P&L is a gain, a negative one a loss. 'Loss × VaR' "
+               "shows, for a loss, how many times a normal-day VaR it is.")
     stress = stress_book(book, snapshots, var_report.var_historical)
     st.dataframe(
-        [{"Scenario": name, "P&L (USD)": f"{r['pnl']:,.0f}",
-          "x VaR": f"{r['x_var']:.1f}x"} for name, r in stress.items()],
+        [{"Scenario": name,
+          "P&L (USD)": f"{r['pnl']:,.0f}",
+          "Outcome": "Loss" if r["is_loss"] else "Gain",
+          "Loss × VaR": (f"{r['loss_x_var']:.1f}×" if r["is_loss"] else "—")}
+         for name, r in stress.items()],
         hide_index=True, use_container_width=True)
-    worst = min(stress.items(), key=lambda kv: kv[1]["pnl"])
-    st.markdown(
-        f'<div class="interp">Worst scenario: <b>{worst[0]}</b>, '
-        f'<b>{worst[1]["pnl"]:,.0f} USD</b> on today\'s book '
-        f'(~{worst[1]["x_var"]:.1f}× the VaR). This is the tail a normal-day VaR does '
-        f'not capture.</div>', unsafe_allow_html=True)
+
+    losses = {n: r for n, r in stress.items() if r["is_loss"]}
+    if losses:
+        worst = min(losses.items(), key=lambda kv: kv[1]["pnl"])   # most negative
+        st.markdown(
+            f'<div class="interp">Worst loss: <b>{worst[0]}</b>, '
+            f'<b>{worst[1]["pnl"]:,.0f} USD</b> on today\'s book '
+            f'(~{worst[1]["loss_x_var"]:.1f}× the VaR). This is the tail a normal-day '
+            f'VaR does not capture.</div>', unsafe_allow_html=True)
+    else:
+        best = max(stress.items(), key=lambda kv: kv[1]["pnl"])
+        st.markdown(
+            f'<div class="interp">None of these historical crises produces a loss on '
+            f'today\'s book — it is positioned to <b>gain</b> from them (the largest '
+            f'gain, <b>{best[1]["pnl"]:,.0f} USD</b>, is in the {best[0]} scenario). '
+            f'That is itself informative: the book sits on the favourable side of '
+            f'these moves. A book with the opposite positioning would show losses '
+            f'here.</div>', unsafe_allow_html=True)
 
 # ============================ 5. CLIENT =================================
 # ============================ LIMITATIONS ================================

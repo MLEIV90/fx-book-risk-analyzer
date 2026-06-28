@@ -29,7 +29,7 @@ class BookRiskReport:
     dv01_by_currency: dict            # currency curve -> DV01
     dv01_total: float                 # sum across curves
     liquidity_buffer: float           # cash buffer at confidence
-    stress_results: dict              # scenario -> {pnl, x_var}
+    stress_results: dict              # scenario -> {pnl, is_loss, loss_x_var}
 
 
 def dv01_book(book, snapshots: dict) -> tuple[dict, float]:
@@ -98,9 +98,17 @@ def stress_book(book, snapshots: dict, var_reference: float) -> dict:
     """
     Apply each historical stress scenario to the whole book.
 
-    For each scenario, P&L = sum over positions of exposure_quote * pair_move.
-    Pairs absent from a scenario get a zero move (declared). Reports the P&L and
-    the ratio to the reference VaR.
+    For each scenario, P&L = sum over positions of exposure_quote * pair_move
+    (positive = gain, negative = loss). Pairs absent from a scenario get a zero
+    move (declared).
+
+    Reports, per scenario:
+      - pnl:      signed profit/loss in USD (negative = loss).
+      - is_loss:  True if the scenario produces a loss.
+      - loss_x_var: for a LOSS, how many times the reference VaR the loss is
+                    (a positive multiple); 0.0 for a gain. This is only meaningful
+                    for losses -- a gain is not 'tail risk', so it is not expressed
+                    as a VaR multiple.
     """
     results: dict[str, dict] = {}
     for name, scenario in STRESS_SCENARIOS.items():
@@ -111,8 +119,12 @@ def stress_book(book, snapshots: dict, var_reference: float) -> dict:
             sign = 1.0 if p.long_base else -1.0
             exposure_quote = sign * p.notional_base * snap.spot
             pnl += exposure_quote * move
-        ratio = abs(pnl) / var_reference if var_reference > 0 else float("nan")
-        results[name] = {"pnl": pnl, "x_var": ratio}
+        is_loss = pnl < 0
+        if is_loss and var_reference > 0:
+            loss_x_var = -pnl / var_reference               # positive multiple
+        else:
+            loss_x_var = 0.0
+        results[name] = {"pnl": pnl, "is_loss": is_loss, "loss_x_var": loss_x_var}
     return results
 
 

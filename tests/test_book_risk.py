@@ -47,7 +47,20 @@ def test_stress_applies_scenarios_and_ratios():
     # All standard scenarios present.
     assert len(results) == len(__import__("fxrisk.risk", fromlist=["STRESS_SCENARIOS"]).STRESS_SCENARIOS)
     for name, r in results.items():
-        assert "pnl" in r and "x_var" in r
+        assert "pnl" in r and "is_loss" in r and "loss_x_var" in r
+
+
+def test_stress_sign_and_loss_multiple():
+    """A loss must be flagged is_loss with a positive loss_x_var; a gain must not."""
+    book, snaps = _book_and_snaps()
+    results = stress_book(book, snaps, var_reference=100_000.0)
+    for r in results.values():
+        if r["pnl"] < 0:
+            assert r["is_loss"] is True
+            assert r["loss_x_var"] > 0          # positive multiple for a loss
+        else:
+            assert r["is_loss"] is False
+            assert r["loss_x_var"] == 0.0       # gains are not VaR multiples
 
 
 def test_stress_zero_move_for_uncovered_pair():
