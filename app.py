@@ -376,7 +376,7 @@ with tab_dash:
                 light, label, msg = (PLOT_AMBER, "WATCH",
                     f"{len(near)} limit(s) above 80% utilisation — monitor closely.")
             elif d_lim.checks:
-                light, label, msg = ("#2E9E5B", "OK",
+                light, label, msg = ("#46B98A", "OK",
                     "All limits within bounds.")
             else:
                 light, label, msg = (PLOT_MUTED, "NO LIMITS",
