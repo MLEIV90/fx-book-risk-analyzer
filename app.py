@@ -421,7 +421,7 @@ with tab_dash:
             _items = sorted(d_net.items())
             _ccys = [c for c, _ in _items]
             _amts = [a for _, a in _items]
-            _bar_colors = ["#2E9E5B" if a >= 0 else PLOT_RED for a in _amts]
+            _bar_colors = [PLOT_ACCENT if a >= 0 else PLOT_AMBER for a in _amts]
             fig_exp = go.Figure(go.Bar(
                 x=_amts, y=_ccys, orientation="h", marker_color=_bar_colors,
                 text=[f"{a:,.0f}" for a in _amts], textposition="auto",
@@ -430,8 +430,8 @@ with tab_dash:
             fig_exp.update_xaxes(title_text="Net exposure (currency units)")
             st.plotly_chart(_plotly_layout(fig_exp, height=max(160, 60 * len(_ccys))),
                             use_container_width=True, config={"displayModeBar": False})
-            st.caption("Green = the book is long that currency, red = short. This is the "
-                       "directional FX position the desk carries.")
+            st.caption("Long (positive) and short (negative) are directions, not "
+                       "good or bad — this is simply the net FX position the desk carries.")
 
             st.caption("This is the executive summary. See **Book & Risk** for the "
                        "full VaR methods, backtests, rate/liquidity and stress detail.")
@@ -633,9 +633,11 @@ with sub_opt:
             gammas = [option_gamma(s, strike, rb, rq, vol, tau) for s in grid]
             fig_g = go.Figure()
             fig_g.add_trace(go.Scatter(x=grid, y=deltas, mode="lines", name="Delta",
-                                       line=dict(color=PLOT_ACCENT, width=2)))
+                                       line=dict(color=PLOT_ACCENT, width=2),
+                                       hovertemplate="Spot %{x:.4f}<br>Delta %{y:.4f}<extra></extra>"))
             fig_g.add_trace(go.Scatter(x=grid, y=gammas, mode="lines", name="Gamma",
-                                       line=dict(color=PLOT_AMBER, width=2), yaxis="y2"))
+                                       line=dict(color=PLOT_AMBER, width=2), yaxis="y2",
+                                       hovertemplate="Spot %{x:.4f}<br>Gamma %{y:.4f}<extra></extra>"))
             fig_g.update_layout(yaxis2=dict(overlaying="y", side="right",
                                             showgrid=False, title="Gamma"))
             fig_g.update_xaxes(title_text="Spot")
