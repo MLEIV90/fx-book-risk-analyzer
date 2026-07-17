@@ -8,9 +8,6 @@ Conventions:
       base  = currency being bought/sold (EUR).
       quote = currency the price is measured in (USD).
 - Annual SIMPLE rates, in decimal (0.045 = 4.5%).
-  (Note: fxrisk.options uses continuous compounding instead, as Garman-Kohlhagen
-  is a continuous-time model. Each convention is standard in its own context;
-  on the short tenors used here the numerical difference is small.)
 - ACT/360 day-count (money-market FX standard).
 - 1 pip = 0.0001 for most pairs.
 

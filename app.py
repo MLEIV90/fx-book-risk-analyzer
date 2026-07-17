@@ -20,10 +20,6 @@ import streamlit as st
 from fxrisk.curves import supported_currencies
 from fxrisk.market import get_market_snapshot
 from fxrisk.forwards import client_rate_with_spread
-from fxrisk.options import (garman_kohlhagen, option_delta, option_gamma,
-                            option_vega, option_theta)
-from fxrisk.option_book import (OptionPosition, OptionBook, option_book_greeks,
-                                option_book_var)
 from fxrisk.book import Position, Book
 from fxrisk.data import MarketDataError, to_returns
 from fxrisk.book_analytics import value_book, book_sensitivity
@@ -146,9 +142,6 @@ def _plotly_layout(fig, height=300):
 if "book" not in st.session_state:
     st.session_state.book = Book()
 book: Book = st.session_state.book
-if "option_book" not in st.session_state:
-    st.session_state.option_book = OptionBook()
-option_book: OptionBook = st.session_state.option_book
 
 SUPPORTED = supported_currencies()
 PAIRS = [f"{b}/USD" for b in ("EUR", "GBP") if b in SUPPORTED]
@@ -262,9 +255,7 @@ with st.sidebar:
         st.caption("No book loaded.")
     else:
         n_pos = len(book)
-        n_opt = len(option_book)
-        st.metric("Positions", f"{n_pos} forward" + ("s" if n_pos != 1 else "")
-                  + (f" · {n_opt} option" + ("s" if n_opt != 1 else "") if n_opt else ""))
+        st.metric("Positions", f"{n_pos} forward" + ("s" if n_pos != 1 else ""))
         _net = book.net_exposure_by_currency()
         st.caption("Net exposure: " + " · ".join(
             f"{ccy} {amt:,.0f}" for ccy, amt in sorted(_net.items())))
@@ -443,9 +434,7 @@ with tab_dash:
 # Define the sub-tabs inside each zone. The existing `with tab_*:` blocks below
 # attach to these, so the two-zone nesting works without re-indenting content.
 with tab_instruments:
-    st.caption("Price and explore a single instrument before putting it in the "
-               "book. Forwards are live; options arrive next.")
-    sub_fwd, sub_opt = st.tabs(["Forward", "Option"])
+    st.caption("Price and explore a forward before putting it in the book.")
 
 with tab_bookrisk:
     st.caption("The book holds every instrument; the analysis below is for the "
@@ -454,7 +443,7 @@ with tab_bookrisk:
         ["Book", "Valuation", "Market risk", "Rates & Liquidity"])
 
 # ===================== INSTRUMENTS · FORWARD =============================
-with sub_fwd:
+with tab_instruments:
     st.subheader("Forward — build & price")
     st.caption("Define a client trade; the provider books the mirror at live "
                "market rates. The position is added to the book.")
@@ -489,265 +478,6 @@ with sub_fwd:
                      "in a moment — the tool does not use synthetic prices.")
         except Exception as exc:
             st.error(f"Could not book the trade: {exc}")
-
-# ===================== INSTRUMENTS · OPTION (placeholder) ================
-with sub_opt:
-    st.subheader("Option — call & put (Garman-Kohlhagen)")
-    st.markdown(
-        '<div class="interp"><b>Theoretical price, not a market price.</b> This '
-        'screen prices the option with <b>GARCH/historical volatility</b>, not the '
-        '<b>implied volatility</b> the market quotes. The real market price would '
-        'use implied vol; this is an indicative model price. (See Limitations.)</div>',
-        unsafe_allow_html=True)
-
-    oc1, oc2, oc3 = st.columns(3)
-    opair = oc1.selectbox("Currency pair", PAIRS, key="opt_pair")
-    otype = oc2.radio("Type", ["Call", "Put"], key="opt_type", horizontal=True)
-    is_call = otype == "Call"
-    otenor = oc3.slider("Tenor (days)", 7, 730, 90, key="opt_tenor")
-    obase, oquote = opair.split("/")
-    onotional = oc1.number_input(f"Notional ({obase})", value=1_000_000, step=100_000,
-                                 format="%d", min_value=1, key="opt_notional")
-
-    if st.button("Price option", type="primary", key="opt_price_btn"):
-        try:
-            with st.spinner("Fetching spot, rates and volatility..."):
-                snap = cached_snapshot(opair, otenor)
-                tau = snap.tenor_years
-                # GARCH vol when available, else historical (declared fallback).
-                vol = snap.vol_garch if snap.vol_garch is not None else snap.vol_historical
-                vol_label = "GARCH" if snap.vol_garch is not None else "historical"
-                # Default strike = at-the-money forward, but let the user adjust.
-                st.session_state["opt_snap"] = {
-                    "spot": snap.spot, "fwd": snap.forward(), "r_base": snap.r_base,
-                    "r_quote": snap.r_quote, "vol": vol, "tau": tau, "pair": opair,
-                    "vol_label": vol_label, "tenor_days": otenor}
-        except MarketDataError:
-            st.error("Live market data is unavailable right now. Please try again.")
-        except Exception as exc:
-            st.error(f"Could not price the option: {exc}")
-
-    snapd = st.session_state.get("opt_snap")
-    if snapd and snapd["pair"] == opair:
-        spot, fwd = snapd["spot"], snapd["fwd"]
-        rb, rq, vol, tau = (snapd["r_base"], snapd["r_quote"], snapd["vol"], snapd["tau"])
-
-        # Strike control, defaulting to the at-the-money forward.
-        strike = st.number_input("Strike", value=round(float(fwd), 4),
-                                 step=0.0010, format="%.4f", key="opt_strike",
-                                 help="Default is the at-the-money forward. "
-                                      "Move it to see in/out-of-the-money behaviour.")
-
-        # Price and primary Greeks.
-        premium_unit = garman_kohlhagen(spot, strike, rb, rq, vol, tau, is_call)
-        premium_total = premium_unit * onotional
-        delta = option_delta(spot, strike, rb, rq, vol, tau, is_call)
-        vega = option_vega(spot, strike, rb, rq, vol, tau)
-
-        st.markdown("##### Price")
-        cards([
-            {"label": f"Premium (total {oquote})", "value": f"{premium_total:,.0f}",
-             "kind": "accent"},
-            {"label": "Premium (per unit)", "value": f"{premium_unit:.5f}"},
-            {"label": "Spot", "value": f"{spot:.4f}"},
-            {"label": "Forward", "value": f"{fwd:.4f}"},
-        ])
-        st.caption(f"{snapd.get('vol_label','GARCH')} volatility used: {vol:.1%} annual "
-                   f"· tenor {tau*365:.0f} days · {otype} struck at {strike:.4f}.")
-
-        st.markdown("##### Primary risk (Greeks)")
-        cards([
-            {"label": "Delta", "value": f"{delta:.4f}",
-             "sub": "hedge ratio (base per option)", "kind": "accent"},
-            {"label": "Vega", "value": f"{vega/100:.5f}",
-             "sub": "per 1 vol point"},
-        ])
-        st.caption("Delta: how much the option moves per unit of spot — the amount "
-                   "of base currency to hedge. Vega: sensitivity to volatility.")
-
-        with st.expander("Full Greeks & put-call parity check"):
-            gamma = option_gamma(spot, strike, rb, rq, vol, tau)
-            theta = option_theta(spot, strike, rb, rq, vol, tau, is_call)
-            cards([
-                {"label": "Gamma", "value": f"{gamma:.4f}",
-                 "sub": "delta change per unit spot"},
-                {"label": "Theta / day", "value": f"{theta:.6f}",
-                 "sub": "time decay (per calendar day)"},
-            ])
-            # Put-call parity validation: C - P = S*DF_base - K*DF_quote.
-            call = garman_kohlhagen(spot, strike, rb, rq, vol, tau, True)
-            put = garman_kohlhagen(spot, strike, rb, rq, vol, tau, False)
-            import math as _m
-            rb_c = _m.log(1 + rb * tau) / tau
-            rq_c = _m.log(1 + rq * tau) / tau
-            parity_rhs = spot * _m.exp(-rb_c * tau) - strike * _m.exp(-rq_c * tau)
-            st.caption(f"Put-call parity: C − P = {call - put:.6f}, "
-                       f"S·DF − K·DF = {parity_rhs:.6f} — "
-                       f"{'consistent ✓' if abs((call-put)-parity_rhs) < 1e-6 else 'mismatch'}. "
-                       f"A passing parity check confirms the pricer is internally consistent.")
-
-        # ---- charts ----
-        import numpy as _np
-        grid = _np.linspace(spot * 0.85, spot * 1.15, 60)
-
-        st.markdown("##### Payoff at expiry")
-        st.caption("Profit/loss per unit of base at maturity, depending on where spot "
-                   "settles. The premium paid is the maximum loss.")
-        if is_call:
-            payoff = _np.maximum(grid - strike, 0.0) - premium_unit
-        else:
-            payoff = _np.maximum(strike - grid, 0.0) - premium_unit
-        fig_p = go.Figure()
-        fig_p.add_trace(go.Scatter(x=grid, y=payoff, mode="lines",
-                                   line=dict(color=PLOT_ACCENT, width=2),
-                                   name="Payoff",
-                                   hovertemplate="Spot %{x:.4f}<br>P&L %{y:.5f}<extra></extra>"))
-        fig_p.add_hline(y=0, line_color=PLOT_GRID)
-        fig_p.add_vline(x=strike, line_color=PLOT_AMBER, line_dash="dash",
-                        annotation_text="Strike")
-        fig_p.update_xaxes(title_text="Spot at expiry")
-        fig_p.update_yaxes(title_text="P&L per unit")
-        st.plotly_chart(_plotly_layout(fig_p), use_container_width=True,
-                        config={"displayModeBar": False})
-
-        gc1, gc2 = st.columns(2)
-        with gc1:
-            st.markdown("##### Value vs spot (today)")
-            st.caption("How the premium changes if spot moves today — smooth, unlike "
-                       "the kinked payoff, because time value remains.")
-            vals = [garman_kohlhagen(s, strike, rb, rq, vol, tau, is_call) for s in grid]
-            fig_v = go.Figure(go.Scatter(x=grid, y=vals, mode="lines",
-                              line=dict(color=PLOT_ACCENT, width=2),
-                              hovertemplate="Spot %{x:.4f}<br>Value %{y:.5f}<extra></extra>"))
-            fig_v.add_vline(x=spot, line_color=PLOT_AMBER, line_dash="dash",
-                            annotation_text="Spot now")
-            fig_v.update_xaxes(title_text="Spot today")
-            fig_v.update_yaxes(title_text="Option value")
-            st.plotly_chart(_plotly_layout(fig_v), use_container_width=True,
-                            config={"displayModeBar": False})
-        with gc2:
-            st.markdown("##### Delta & gamma vs spot")
-            st.caption("Delta changes as spot moves (that change is gamma) — the "
-                       "non-linearity that makes options different from forwards.")
-            deltas = [option_delta(s, strike, rb, rq, vol, tau, is_call) for s in grid]
-            gammas = [option_gamma(s, strike, rb, rq, vol, tau) for s in grid]
-            fig_g = go.Figure()
-            fig_g.add_trace(go.Scatter(x=grid, y=deltas, mode="lines", name="Delta",
-                                       line=dict(color=PLOT_ACCENT, width=2),
-                                       hovertemplate="Spot %{x:.4f}<br>Delta %{y:.4f}<extra></extra>"))
-            fig_g.add_trace(go.Scatter(x=grid, y=gammas, mode="lines", name="Gamma",
-                                       line=dict(color=PLOT_AMBER, width=2), yaxis="y2",
-                                       hovertemplate="Spot %{x:.4f}<br>Gamma %{y:.4f}<extra></extra>"))
-            fig_g.update_layout(yaxis2=dict(overlaying="y", side="right",
-                                            showgrid=False, title="Gamma"))
-            fig_g.update_xaxes(title_text="Spot")
-            fig_g.update_yaxes(title_text="Delta")
-            st.plotly_chart(_plotly_layout(fig_g), use_container_width=True,
-                            config={"displayModeBar": False})
-
-        # ---- add to the (separate) option book ----
-        st.divider()
-        if st.button("Add to option book", key="opt_add_btn"):
-            option_book.add(OptionPosition(
-                pair=opair, is_call=is_call, notional_base=float(onotional),
-                strike=float(strike), tenor_days=int(snapd["tenor_days"]), vol=float(vol),
-                premium_unit=float(premium_unit),
-                label=f"{otype} {opair} @ {strike:.4f}"))
-            st.success(f"Added to option book: {otype} {onotional:,.0f} {obase} "
-                       f"@ {strike:.4f}.")
-    else:
-        st.caption("Choose the option's terms and click **Price option** to see its "
-                   "premium, Greeks and payoff.")
-
-    # ---- the option book, managed by aggregate greeks ----
-    st.divider()
-    st.markdown("##### Option book (managed by aggregate greeks)")
-    st.markdown(
-        '<div class="interp">Options are kept in their <b>own book</b>, separate '
-        'from the forward book. An option book is managed by its <b>greek '
-        'profile</b> (net delta, gamma, vega, theta), not by a linear VaR — a '
-        'covariance VaR would misstate non-linear risk. A full-revaluation option '
-        'VaR is the correct next step and is documented as future work.</div>',
-        unsafe_allow_html=True)
-
-    if option_book.is_empty:
-        st.caption("The option book is empty. Price an option above and click "
-                   "**Add to option book**.")
-    else:
-        try:
-            with st.spinner("Valuing option book at live rates..."):
-                ob_spots, ob_rates = {}, {}
-                for pr in option_book.pairs():
-                    s = cached_snapshot(pr, 90)
-                    ob_spots[pr] = s.spot
-                    ob_rates[pr] = (s.r_base, s.r_quote)
-                greeks = option_book_greeks(option_book, ob_spots, ob_rates)
-            tot = greeks["totals"]
-            cards([
-                {"label": "Book value", "value": f"{tot['value']:,.0f}",
-                 "sub": "sum of option values", "kind": "accent"},
-                {"label": "Net delta", "value": f"{tot['delta']:,.0f}",
-                 "sub": "base-ccy directional exposure"},
-                {"label": "Net gamma", "value": f"{tot['gamma']:,.0f}"},
-                {"label": "Net vega", "value": f"{tot['vega']/100:,.0f}",
-                 "sub": "per 1 vol point"},
-                {"label": "Net theta/day", "value": f"{tot['theta']:,.0f}",
-                 "sub": "daily time decay", "kind": "warn"},
-            ])
-            rows = [{
-                "Pair": r["pair"], "Type": r["kind"], "Strike": f"{r['strike']:.4f}",
-                "Notional": f"{r['notional']:,.0f}", "Value": f"{r['value']:,.0f}",
-                "Delta": f"{r['delta']:,.0f}", "Gamma": f"{r['gamma']:,.0f}",
-                "Vega": f"{r['vega']/100:,.0f}", "Theta/day": f"{r['theta']:,.0f}",
-            } for r in greeks["positions"]]
-            st.dataframe(rows, use_container_width=True, hide_index=True)
-            if st.button("Clear option book", key="opt_clear_btn"):
-                option_book.clear()
-                st.rerun()
-            st.caption("Net delta is the directional FX exposure (hedge it with a "
-                       "spot/forward). Net gamma shows how fast that delta moves. "
-                       "Net vega is exposure to volatility. Net theta is the daily "
-                       "bleed from time decay.")
-
-            # A2: full-revaluation VaR of the option book (non-linear).
-            st.markdown("##### Option book VaR (full revaluation)")
-            try:
-                ob_returns = {}
-                hist = cached_spot_history(tuple(option_book.pairs()), period="2y")
-                hist_ret = to_returns(hist)
-                for pr in option_book.pairs():
-                    ob_returns[pr] = hist_ret[pr].to_numpy()
-                vres = option_book_var(option_book, ob_spots, ob_rates, ob_returns,
-                                       confidence=confidence, n_sims=20000)
-                cards([
-                    {"label": f"VaR · full reval ({confidence:.0%})",
-                     "value": f"{vres['var_full_reval']:,.0f}",
-                     "sub": "re-prices every option", "kind": "accent"},
-                    {"label": "VaR · delta-equivalent",
-                     "value": f"{vres['var_delta_equiv']:,.0f}",
-                     "sub": "linear approximation"},
-                    {"label": "Gamma effect",
-                     "value": f"{vres['gamma_effect']:+,.0f}",
-                     "sub": "non-linearity captured", "kind": "warn"},
-                ])
-                st.markdown(
-                    '<div class="interp"><b>Full revaluation</b> re-prices each option '
-                    'with Garman-Kohlhagen under thousands of simulated spot scenarios, '
-                    'so it captures the <b>gamma</b> (curvature) that a linear '
-                    '<b>delta-equivalent</b> VaR misses. The <b>gamma effect</b> is the '
-                    'gap between them: for long options it is usually negative (positive '
-                    'gamma cushions losses), so the linear VaR overstates the risk. '
-                    'Scope: only spot is shocked (a spot/delta-gamma VaR); volatility '
-                    'risk (vega) is held fixed and would be the next step.</div>',
-                    unsafe_allow_html=True)
-            except MarketDataError:
-                st.caption("Market data unavailable to compute the option book VaR.")
-            except Exception as exc:
-                st.caption(f"Could not compute option book VaR: {exc}")
-        except MarketDataError:
-            st.error("Live market data unavailable to value the option book.")
-        except Exception as exc:
-            st.error(f"Could not value the option book: {exc}")
 
 # ============================ 1. BOOK =====================================
 with tab_book:
@@ -1243,9 +973,8 @@ with tab_limits:
         "- **Flat curve extrapolation.** Outside the 3M–2Y anchor range the rate "
         "is held flat (a position with under ~90 days left uses the 3M rate).\n"
         "- **Compounding conventions.** Forwards use simple rates (the CIP "
-        "convention); options convert to continuous compounding internally "
-        "(Garman-Kohlhagen is a continuous-time model). On short tenors the "
-        "numerical difference is small.")
+        "convention, ACT/360). Standard in this context; a curve built with a "
+        "different day-count would give a slightly different rate.")
 
     st.markdown("##### 3 · Market risk (VaR)")
     st.markdown(
@@ -1263,25 +992,16 @@ with tab_limits:
         "re-derived live. The script that computes them is in the repo for "
         "traceability.")
 
-    st.markdown("##### 4 · Options")
-    st.markdown(
-        "- **GARCH volatility, not implied.** Options are priced with "
-        "GARCH/historical volatility, **not** the implied volatility the market "
-        "quotes. The result is an indicative **model price**, not a market price — "
-        "this is the single most important option limitation.\n"
-        "- **Option book by greeks, not VaR.** The option book is managed by its "
-        "aggregate greek profile (delta, gamma, vega, theta), not a linear VaR, "
-        "because a covariance VaR would misstate non-linear risk. A "
-        "full-revaluation option VaR is the correct next step and is left as "
-        "documented future work.")
-
-    st.markdown("##### 5 · Overall")
+    st.markdown("##### 4 · Overall")
     st.markdown(
         "- **Demonstration tool.** Educational/illustrative, not investment "
         "advice and not a sellable product.\n"
         "- **No institutional infrastructure.** No real-time data, no 130+ "
-        "currency coverage, no implied-vol surface, none of the security, "
-        "compliance and validation layers a production system carries.")
+        "currency coverage, none of the security, compliance and validation "
+        "layers a production system carries.\n"
+        "- **Forwards only.** This version covers the provider's forward book. "
+        "FX options (Garman-Kohlhagen pricing, Greeks, full-revaluation VaR) "
+        "are out of scope here and are being developed as their own tool.")
 
     st.caption("These limitations are stated so the numbers are read for what they "
                "are: a rigorous demonstration within a clearly bounded scope.")

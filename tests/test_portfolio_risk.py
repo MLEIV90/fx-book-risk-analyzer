@@ -179,3 +179,42 @@ def test_student_t_var_non_negative_on_trending_data():
     pos = np.array([1_000_000.0])
     bull = np.random.default_rng(0).standard_normal((500, 1)) * 0.003 + 0.01
     assert var_student_t(bull, pos, 0.99) >= 0.0
+
+
+def test_student_t_fit_recovers_true_nu():
+    """
+    Regression test for the fscale/floc fitting bug: pinning scale to the
+    sample std forces the optimizer to inflate nu to compensate (verified: a
+    true nu=5 sample was fit to nu~16.5 by the old code), which defeats the
+    point of fitting a Student-t at all. Fitting nu/loc/scale jointly should
+    recover a nu in the right ballpark instead of blowing up.
+    """
+    from fxrisk.portfolio_risk import _fit_student_t
+    from scipy.stats import t as student_t
+
+    rng = np.random.default_rng(42)
+    true_nu = 5.0
+    pnl = student_t.rvs(df=true_nu, loc=0.0, scale=0.01, size=4000, random_state=rng)
+
+    nu, loc, scale = _fit_student_t(pnl)
+    assert nu < 12.0                       # not blown up toward thin tails
+
+
+def test_student_t_var_heavier_than_normal_on_fat_tailed_data():
+    """
+    The Student-t VaR must be >= the parametric normal VaR at 99% confidence
+    when the underlying P&L is genuinely fat-tailed -- that heavier tail is
+    the entire reason the method exists.
+    """
+    from fxrisk.portfolio_risk import var_student_t
+    from fxrisk.risk import var_parametric
+    from scipy.stats import t as student_t
+
+    rng = np.random.default_rng(7)
+    pnl = student_t.rvs(df=5.0, loc=0.0, scale=0.01, size=4000, random_state=rng)
+    pos = np.array([1.0])
+    returns = pnl.reshape(-1, 1)
+
+    vt = var_student_t(returns, pos, 0.99)
+    vn = var_parametric(returns, pos, 0.99)
+    assert vt >= vn

@@ -10,8 +10,7 @@ lose?" (VaR / ES) and "is that number trustworthy?" (Kupiec), plus "where does
 the risk come from?" (attribution).
 
 Scope, declared: risk is measured on the forward positions' spot exposure (the
-delta of each forward to its pair). Options, if any, are valued separately and
-do NOT enter the portfolio VaR in this version.
+delta of each forward to its pair).
 
 Pure functions where possible: VaR/ES/Kupiec/attribution take returns and
 positions as arrays and can be unit-tested without the network.
@@ -318,26 +317,55 @@ def var_ewma(returns: np.ndarray, positions: np.ndarray,
     return norm.ppf(confidence) * port_sd
 
 
+def _fit_student_t(pnl: np.ndarray) -> tuple[float, float, float]:
+    """
+    MLE-fit a Student-t (nu, loc, scale) to portfolio P&L, all three parameters
+    free.
+
+    A tempting shortcut is to pin loc/scale to the sample mean/std
+    (`student_t.fit(pnl, floc=mu, fscale=sigma)`) and only fit `nu`. That is
+    wrong: a Student-t with scale `s` has standard deviation
+    `s * sqrt(nu / (nu - 2))`, not `s`. Forcing scale = sample std makes the
+    optimizer compensate by inflating `nu` -- on data drawn from a true
+    nu=5 t-distribution, that shortcut recovers nu≈16.5, badly biased toward
+    thin tails. The bias then compounds: `student_t.ppf(df=nu)` returns the
+    *raw* t-quantile, whose variance is `nu/(nu-2)` (not 1), so multiplying it
+    by sigma double-applies the tail-thickness adjustment and further
+    overstates the quantile. The two errors happen to roughly cancel in the
+    final VaR number, but that is luck, not design, and the fitted `nu` is
+    unusable on its own. Fitting nu/loc/scale jointly avoids both.
+    """
+    from scipy.stats import t as student_t
+    nu, loc, scale = student_t.fit(pnl)
+    nu = max(nu, 2.1)                                     # keep variance finite
+    return nu, loc, scale
+
+
 def var_student_t(returns: np.ndarray, positions: np.ndarray,
                   confidence: float = 0.99) -> float:
     """
     B1: parametric VaR with a Student-t quantile to capture fat tails.
 
     The normal VaR underestimates extreme losses because FX returns are
-    fat-tailed. This fits the degrees of freedom of the portfolio P&L and uses
-    the t-quantile instead of the normal z-score, giving a heavier tail.
+    fat-tailed. This fits a Student-t distribution to the portfolio P&L, with
+    degrees of freedom, location and scale all free (see `_fit_student_t` for
+    why a naive floc/fscale fit is wrong), and reads the VaR quantile directly
+    off the fitted distribution.
     """
     from scipy.stats import t as student_t
     pnl = (np.asarray(returns, dtype=float).reshape(len(returns), -1) @ positions)
-    mu, sigma = float(np.mean(pnl)), float(np.std(pnl, ddof=1))
-    # Fit degrees of freedom; guard against too-few points.
     try:
-        nu, _, _ = student_t.fit(pnl, floc=mu, fscale=sigma)
-        nu = max(nu, 3.0)                                # keep variance finite
+        nu, loc, scale = _fit_student_t(pnl)
+        var = -student_t.ppf(1.0 - confidence, df=nu, loc=loc, scale=scale)
     except Exception:
-        nu = 5.0
-    q = student_t.ppf(1.0 - confidence, df=nu)           # negative tail quantile
-    return max(-(mu + sigma * q), 0.0)                    # VaR is non-negative
+        # Declared fallback: if the MLE fit fails to converge (e.g. too few
+        # points, or constant/degenerate data), fall back to a normal VaR on
+        # the sample mean/std. Thinner-tailed than a proper Student-t, but
+        # always well-defined.
+        from scipy.stats import norm
+        mu, sigma = float(np.mean(pnl)), float(np.std(pnl, ddof=1))
+        var = -(mu + sigma * norm.ppf(1.0 - confidence))
+    return max(var, 0.0)                                  # VaR is non-negative
 
 
 def christoffersen_independence(pnl: np.ndarray, var_series: np.ndarray
