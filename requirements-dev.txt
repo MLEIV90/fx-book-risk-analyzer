@@ -3,3 +3,4 @@
 -r requirements.txt
 pytest>=8.0
 hypothesis>=6.0
+openpyxl>=3.1

@@ -53,7 +53,8 @@ def build_excel_report(*, book_rows: list[dict], summary: dict,
     f_num2 = wb.add_format({"font_name": "Arial", "num_format": "#,##0.00;(#,##0.00)",
                             "border": 1})
     f_rate = wb.add_format({"font_name": "Arial", "num_format": "0.0000", "border": 1})
-    f_pct = wb.add_format({"font_name": "Arial", "num_format": "0.00%", "border": 1})
+    f_pct = wb.add_format({"font_name": "Arial", "num_format": "0.0%", "border": 1})
+    f_int = wb.add_format({"font_name": "Arial", "num_format": "0", "border": 1})
     f_txt = wb.add_format({"font_name": "Arial", "border": 1})
     f_ok = wb.add_format({"bold": True, "font_name": "Arial", "font_color": "white",
                           "bg_color": _OK_BG, "border": 1, "align": "center"})
@@ -96,28 +97,47 @@ def build_excel_report(*, book_rows: list[dict], summary: dict,
         for lim in limits:
             s.write(row, 0, lim["label"], f_label)
             s.write(row, 1, lim["status"], f_ok if lim["ok"] else f_breach); row += 1
+        row += 1
+
+    # Footer: data source, disclaimer, and which VaR governs the limit check
+    # above -- so the report is self-explanatory without the app alongside it.
+    s.write(row, 0, "Data: yfinance (spot), FRED & ECB (rate curves), "
+                    "GARCH(1,1)-t (volatility). Educational/demonstration tool "
+                    "— not investment advice.", f_sub); row += 1
+    s.write(row, 0, "The VaR limit above is checked against the GOVERNING VaR "
+                    "= max(historical, Student-t) — the more conservative of "
+                    "the two fat-tail-aware methods listed under 'Value at "
+                    "Risk' — not any single figure in isolation.", f_sub)
 
     # ===================== Sheet 2: Positions =====================
     p = wb.add_worksheet("Positions")
     p.hide_gridlines(2)
     cols = ["Pair", "Side", "Notional", "Rate quoted", "Tenor (days)", "MtM (USD)"]
-    widths = [12, 16, 18, 14, 14, 18]
-    for i, (c, w) in enumerate(zip(cols, widths)):
+    # Widths sized to content: "Provider sells EUR" (18 chars) is the longest
+    # Side value; the rest are sized to their formatted numbers/headers.
+    widths = [10, 20, 14, 13, 13, 14]
+    for i, w in enumerate(widths):
         p.set_column(i, i, w)
-        p.write(0, i, c, f_hdr)
-    for r, pos in enumerate(book_rows, start=1):
+    p.write(0, 0, "Positions", f_title)
+    hdr_row = 2
+    for i, c in enumerate(cols):
+        p.write(hdr_row, i, c, f_hdr)
+    for r, pos in enumerate(book_rows, start=hdr_row + 1):
         p.write(r, 0, pos.get("pair", ""), f_txt)
         p.write(r, 1, pos.get("side", ""), f_txt)
         p.write_number(r, 2, pos.get("notional", 0), f_num)
         p.write_number(r, 3, pos.get("rate", 0), f_rate)
-        p.write_number(r, 4, pos.get("tenor", 0), f_txt)
+        p.write_number(r, 4, pos.get("tenor", 0), f_int)
         p.write_number(r, 5, pos.get("mtm", 0), f_num)
 
     # ===================== Sheet 3: Risk detail =====================
     d = wb.add_worksheet("Risk detail")
     d.hide_gridlines(2)
-    d.set_column("A:A", 28); d.set_column("B:B", 18)
-    rr = 0
+    # A:A sized for the longest section header, "Key-rate DV01 by tenor (USD
+    # per 1bp)" (36 chars), so it never gets visually truncated.
+    d.set_column("A:A", 38); d.set_column("B:B", 16)
+    d.write(0, 0, "Risk detail", f_title)
+    rr = 2
     d.write(rr, 0, "DV01 by currency (USD per 1bp)", f_hdr)
     d.write(rr, 1, "", f_hdr); rr += 1
     for ccy, dv in risk_detail.get("dv01_by_ccy", {}).items():
