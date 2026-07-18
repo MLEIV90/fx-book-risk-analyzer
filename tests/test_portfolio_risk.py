@@ -60,6 +60,103 @@ def test_kupiec_bad_model_fails():
     assert not res.passed
 
 
+# --------------------------- Monte Carlo p-values (H1) -----------------------
+
+
+def test_kupiec_mc_pvalue_in_unit_interval():
+    """The exact Monte Carlo p-value (Dufour 2006) must lie in [0, 1]."""
+    rng = np.random.default_rng(11)
+    n = 500
+    pnl = rng.normal(0, 1000, n)
+    var_series = np.full(n, 2326.0)
+    res = kupiec_backtest(pnl, var_series, 0.99)
+    assert 0.0 <= res.p_value_mc <= 1.0
+
+
+def test_kupiec_mc_no_spurious_rejection_on_well_specified_var():
+    """
+    A large, well-specified sample must not be spuriously rejected by the
+    exact Monte Carlo p-value.
+    """
+    from scipy.stats import norm
+    rng = np.random.default_rng(21)
+    n = 5000
+    pnl = rng.normal(0, 1000, n)
+    var_series = np.full(n, -norm.ppf(0.01) * 1000.0)   # exact 99% VaR of N(0,1000)
+    res = kupiec_backtest(pnl, var_series, 0.99)
+    assert res.p_value_mc > 0.05
+    assert res.passed
+
+
+def test_christoffersen_mc_pvalue_in_unit_interval():
+    """The independence test's exact Monte Carlo p-value must lie in [0, 1]."""
+    from fxrisk.portfolio_risk import christoffersen_independence
+    rng = np.random.default_rng(13)
+    n = 500
+    pnl = rng.normal(0, 1000, n)
+    var_series = np.full(n, 2326.0)
+    res = christoffersen_independence(pnl, var_series)
+    assert 0.0 <= res["p_value_mc"] <= 1.0
+
+
+def test_christoffersen_mc_no_spurious_rejection_on_iid_hits():
+    """A large i.i.d. (non-clustered) exception series must not be spuriously
+    flagged as clustered by the exact Monte Carlo p-value."""
+    from scipy.stats import norm
+    from fxrisk.portfolio_risk import christoffersen_independence
+    rng = np.random.default_rng(23)
+    n = 5000
+    pnl = rng.normal(0, 1000, n)
+    var_series = np.full(n, -norm.ppf(0.01) * 1000.0)
+    res = christoffersen_independence(pnl, var_series)
+    assert res["p_value_mc"] > 0.05
+    assert res["independent"]
+
+
+def test_kupiec_and_independence_nulls_are_not_cross_wired():
+    """
+    Regression for the H1 CRITICAL null-specification requirement: Kupiec's
+    Monte Carlo null is i.i.d. Bernoulli(p) at the THEORETICAL rate; the
+    independence test's Monte Carlo null is i.i.d. Bernoulli(pi_hat) at the
+    OBSERVED rate, unrestricted. A badly-miscalibrated but i.i.d. (non-
+    clustered) breach series -- rate far above the theoretical p -- must be
+    REJECTED by Kupiec (wrong coverage) while still PASSING independence (no
+    clustering). If the nulls were swapped or conflated, this separation
+    would not hold.
+    """
+    from fxrisk.portfolio_risk import christoffersen_independence
+    rng = np.random.default_rng(5)
+    n = 2000
+    hits = rng.binomial(1, 0.20, size=n)          # i.i.d., rate >> p=0.01
+    pnl = np.where(hits == 1, -100.0, 100.0)
+    var_series = np.full(n, 50.0)
+
+    kup = kupiec_backtest(pnl, var_series, 0.99)
+    indep = christoffersen_independence(pnl, var_series)
+
+    assert not kup.passed                          # coverage is genuinely wrong
+    assert indep["independent"]                     # but no clustering
+
+
+def test_kupiec_mc_agrees_with_asymptotic_flag():
+    """`mc_agrees_with_asymptotic` reflects whether both p-values are on the
+    same side of the 5% threshold."""
+    rng = np.random.default_rng(1)
+    n = 1000
+    pnl = rng.normal(0, 1000, n)
+    var_series = np.full(n, 2326.0)
+    res = kupiec_backtest(pnl, var_series, 0.99)
+    assert res.mc_agrees_with_asymptotic == ((res.p_value > 0.05) == (res.p_value_mc > 0.05))
+
+
+def test_rolling_backtest_reports_mc_pvalue():
+    """rolling_backtest must also report the exact Monte Carlo p-value, not
+    just the asymptotic one (H1 covers all three backtests)."""
+    from fxrisk.portfolio_risk import rolling_backtest
+    res = rolling_backtest(_returns(seed=3, n=1500), POS, 0.99, window=250)
+    assert 0.0 <= res.p_value_mc <= 1.0
+
+
 def test_var_10day_scaling():
     """10-day VaR must equal the 1-day VaR scaled by sqrt(10) (Basel rule)."""
     import numpy as np

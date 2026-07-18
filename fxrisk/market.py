@@ -25,7 +25,17 @@ from fxrisk.garch import historical_vol, fit_garch
 
 @dataclass
 class MarketSnapshot:
-    """A fully-sourced picture of the market for one pair at one tenor."""
+    """
+    A fully-sourced picture of the market for one pair at one tenor.
+
+    Day-count (H2): `tenor_years` is the BASE currency's own year fraction;
+    `tenor_years_quote` is the QUOTE currency's (defaults to `tenor_years`
+    when not set, e.g. for snapshots built directly in tests -- exact
+    whenever base and quote share a day-count basis). Use `tau_quote` to read
+    the effective quote-side tau; MtM discounting (r_quote) must use it, not
+    `tenor_years`, whenever the pair's legs differ in convention (any pair
+    involving GBP against EUR or USD -- see fxrisk.forwards.DAY_COUNT_BASIS).
+    """
     pair: str
     base_ccy: str
     quote_ccy: str
@@ -37,10 +47,18 @@ class MarketSnapshot:
     vol_garch: float | None
     notes: list[str] = field(default_factory=list)
     sources: dict = field(default_factory=dict)
+    tenor_years_quote: float | None = None
+
+    @property
+    def tau_quote(self) -> float:
+        """The QUOTE currency's own year fraction (falls back to
+        `tenor_years` when `tenor_years_quote` isn't set)."""
+        return self.tenor_years_quote if self.tenor_years_quote is not None else self.tenor_years
 
     def forward(self) -> float:
         """Theoretical forward from this snapshot (Covered Interest Rate Parity)."""
-        return forward_rate(self.spot, self.r_base, self.r_quote, self.tenor_years)
+        return forward_rate(self.spot, self.r_base, self.r_quote,
+                            self.tenor_years, self.tau_quote)
 
 
 def get_market_snapshot(pair: str, tenor_days: int,
@@ -60,7 +78,11 @@ def get_market_snapshot(pair: str, tenor_days: int,
         if ccy not in supported_currencies():
             raise ValueError(f"No rate curve available for {ccy}.")
 
-    tenor_years = year_fraction(tenor_days)
+    # H2: day-count is currency-aware -- ACT/360 for EUR/USD, ACT/365 for GBP.
+    # Base and quote can therefore have slightly different year fractions for
+    # the SAME tenor_days (e.g. any GBP leg vs a EUR or USD leg).
+    tenor_years = year_fraction(tenor_days, base_ccy)
+    tenor_years_quote = year_fraction(tenor_days, quote_ccy)
     notes: list[str] = []
     sources: dict = {}
 
@@ -79,9 +101,10 @@ def get_market_snapshot(pair: str, tenor_days: int,
     else:
         sources["spot"] = "yfinance (latest close)"
 
-    # 2. Rates per currency from FRED, at this tenor.
+    # 2. Rates per currency from FRED, at this tenor -- each curve read at
+    #    its OWN currency's year fraction (H2).
     r_base, curve_b = rate_for_tenor(base_ccy, tenor_years)
-    r_quote, curve_q = rate_for_tenor(quote_ccy, tenor_years)
+    r_quote, curve_q = rate_for_tenor(quote_ccy, tenor_years_quote)
     sources["rates"] = f"Rate curves ({', '.join(curve_b.sources + curve_q.sources)})"
     if curve_b.notes:
         notes.append(f"{base_ccy}: {curve_b.notes}")
@@ -106,5 +129,5 @@ def get_market_snapshot(pair: str, tenor_days: int,
         pair=pair, base_ccy=base_ccy, quote_ccy=quote_ccy,
         tenor_years=tenor_years, spot=spot, r_base=r_base, r_quote=r_quote,
         vol_historical=vol_hist, vol_garch=vol_garch,
-        notes=notes, sources=sources,
+        notes=notes, sources=sources, tenor_years_quote=tenor_years_quote,
     )

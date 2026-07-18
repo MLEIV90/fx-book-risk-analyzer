@@ -739,20 +739,31 @@ with tab_mkt:
         k2.metric("Exceptions", f"{kup.exceptions}",
                   help=f"Days the loss exceeded the VaR. Expected ~{kup.expected_exceptions:.0f}.")
         k3.metric("Model", "PASS" if kup.passed else "REVIEW",
-                  help=f"Kupiec p-value {kup.p_value:.2f}. Above 0.05 = not rejected.")
+                  help=f"Exact Monte Carlo p-value {kup.p_value_mc:.2f} (authoritative); "
+                       f"asymptotic chi-squared {kup.p_value:.2f}. Above 0.05 = not rejected.")
+        kup_agree = ("the two agree — the asymptotic approximation was adequate here"
+                    if kup.mc_agrees_with_asymptotic else
+                    "they DISAGREE — with this few exceptions the asymptotic chi-squared "
+                    "approximation is unreliable, so the Monte Carlo value is authoritative")
         st.markdown(
             f'<div class="interp">{method_note}The VaR was breached <b>{kup.exceptions}</b> '
             f'times in {kup.observations} tested days (expected ~{kup.expected_exceptions:.0f}). '
             f'The Kupiec proportion-of-failures test {"does not reject" if kup.passed else "rejects"} '
-            f'the model (p-value {kup.p_value:.2f}).</div>', unsafe_allow_html=True)
+            f'the model — exact Monte Carlo p-value <b>{kup.p_value_mc:.2f}</b> '
+            f'(asymptotic chi-squared: {kup.p_value:.2f}); {kup_agree}.</div>',
+            unsafe_allow_html=True)
 
         pnl_full = returns @ positions
         chr_res = christoffersen_independence(
             pnl_full, np.full(len(pnl_full), var_report.var_historical))
+        chr_agree = ("agrees with the asymptotic approximation"
+                    if chr_res["mc_agrees_with_asymptotic"] else
+                    "disagrees with the asymptotic approximation — the Monte Carlo value is authoritative")
         st.markdown(
             f'<div class="interp"><b>Independence (Christoffersen):</b> '
             f'{"exceptions are not clustered — good" if chr_res["independent"] else "exceptions cluster — the model may be slow to react"} '
-            f'(p-value {chr_res["p_value"]:.2f}). Kupiec checks how many breaches occur; '
+            f'— exact Monte Carlo p-value <b>{chr_res["p_value_mc"]:.2f}</b> '
+            f'(asymptotic: {chr_res["p_value"]:.2f}, {chr_agree}). Kupiec checks how many breaches occur; '
             f'this checks whether they bunch together, which a count alone would miss.'
             f'</div>', unsafe_allow_html=True)
 
@@ -973,8 +984,9 @@ with tab_limits:
         "- **Flat curve extrapolation.** Outside the 3M–2Y anchor range the rate "
         "is held flat (a position with under ~90 days left uses the 3M rate).\n"
         "- **Compounding conventions.** Forwards use simple rates (the CIP "
-        "convention, ACT/360). Standard in this context; a curve built with a "
-        "different day-count would give a slightly different rate.")
+        "convention), with a currency-aware day-count: ACT/360 for EUR and "
+        "USD (Eurocurrency money-market convention), ACT/365 for GBP "
+        "(sterling convention) — each leg uses its own currency's basis.")
 
     st.markdown("##### 3 · Market risk (VaR)")
     st.markdown(

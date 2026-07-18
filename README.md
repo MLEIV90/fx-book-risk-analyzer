@@ -81,10 +81,10 @@ pytest -q
 
 The numbers are validated at two levels:
 
-- **96 automated tests** covering pricing, the five VaR methods, and sign and edge-case invariants — including **property-based tests** that check invariants (e.g. forward mark-to-market symmetry) over thousands of random inputs.
-- A **ten-layer audit** across correctness, robustness and experience: pricing verified against analytical references (put-call parity to machine precision; the three core VaRs within 1% of their analytical values), presentation logic checked so on-screen labels match what each number means, edge cases hardened (VaR floored at zero, stressed VaR floored at the normal VaR), and conventions unified (ACT/360 throughout).
+- **109 automated tests** covering pricing, the five VaR methods, and sign and edge-case invariants — including **property-based tests** that check invariants (e.g. forward mark-to-market symmetry) over thousands of random inputs.
+- A **ten-layer audit** across correctness, robustness and experience: pricing verified against analytical references (the three core VaRs within 1% of their analytical values), presentation logic checked so on-screen labels match what each number means, edge cases hardened (VaR floored at zero, stressed VaR floored at the normal VaR), and day-count conventions made currency-aware (ACT/360 for EUR/USD, ACT/365 for GBP).
 
-A full technical and user manual is included in the repository: **`FX_Book_Risk_Analyzer_Manual.docx`** — it documents every module, formula, screen and calculation in detail.
+**Statistical assumptions.** The backtests and VaR methods each rely on conditions that don't automatically hold on a ~2-year daily sample — asymptotic test validity, exception-count power, window representativeness, distributional assumptions, estimation risk. These are stated explicitly, method by method, in **[`NOTES.md`](NOTES.md)** rather than left implicit.
 
 ---
 

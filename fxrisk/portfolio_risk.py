@@ -69,14 +69,41 @@ class VaRReport:
 
 @dataclass
 class KupiecResult:
-    """Outcome of a Kupiec proportion-of-failures backtest."""
+    """
+    Outcome of a Kupiec proportion-of-failures backtest.
+
+    Two p-values are reported side by side (H1, statistical rigour):
+    - p_value: the classical ASYMPTOTIC chi-squared (1 df) p-value. Its
+      validity relies on the exception count being large enough for the
+      chi-squared approximation to hold -- often NOT the case here (a 99%
+      VaR over a ~2-year/250-day window typically has single-digit
+      exceptions).
+    - p_value_mc: an EXACT Monte Carlo p-value (Dufour 2006), simulated under
+      the same null with the same LR statistic, valid regardless of sample
+      size.
+    `passed` is decided on p_value_mc (the authoritative one). Use
+    `mc_agrees_with_asymptotic` to see whether the asymptotic shortcut would
+    have given the same accept/reject call -- when it doesn't, trust the MC
+    value, especially with few exceptions.
+
+    Applicability (see NOTES.md): even with an exact p-value, a test with few
+    exceptions has LOW POWER -- it cannot reliably tell a correctly-calibrated
+    model from a moderately miscalibrated one. A "pass" here is WEAK evidence
+    of correctness (the data didn't contradict the model), not proof of it.
+    """
     observations: int
     exceptions: int
     expected_exceptions: float
     failure_rate: float
     lr_statistic: float
-    p_value: float
-    passed: bool                              # True if the model is not rejected
+    p_value: float                            # asymptotic (chi-squared, 1 df)
+    p_value_mc: float                         # Monte Carlo, exact by construction
+    passed: bool                              # True if not rejected, by p_value_mc
+
+    @property
+    def mc_agrees_with_asymptotic(self) -> bool:
+        """True if the asymptotic and Monte Carlo p-values agree on accept/reject at 5%."""
+        return (self.p_value > 0.05) == (self.p_value_mc > 0.05)
 
 
 def _factor_positions(book, spots: dict[str, float]) -> tuple[list[str], np.ndarray]:
@@ -196,17 +223,66 @@ def portfolio_var(returns: np.ndarray, positions: np.ndarray,
     )
 
 
+def _kupiec_lr_stat(exceptions: int, n: int, p: float) -> float:
+    """
+    Kupiec proportion-of-failures (POF) likelihood-ratio statistic.
+
+    Shared by the OBSERVED statistic and by Monte Carlo simulated draws under
+    the null (see `_kupiec_mc_pvalue`), so both go through the exact same
+    formula -- the point of a Monte Carlo p-value is to sidestep the
+    asymptotic chi-squared approximation, not to introduce a second, possibly
+    inconsistent, implementation of the statistic itself.
+    """
+    pi = exceptions / n if n > 0 else 0.0
+    if exceptions == 0:
+        return -2.0 * (n * np.log(1 - p))
+    elif exceptions == n:
+        return -2.0 * (n * np.log(p))
+    return -2.0 * (
+        (n - exceptions) * np.log(1 - p) + exceptions * np.log(p)
+        - (n - exceptions) * np.log(1 - pi) - exceptions * np.log(pi)
+    )
+
+
+def _kupiec_mc_pvalue(lr_obs: float, n: int, p: float,
+                      n_sims: int = 10_000, seed: int = 12345) -> float:
+    """
+    Exact Monte Carlo p-value for the Kupiec LR statistic (Dufour 2006).
+
+    The null here is UNCONDITIONAL COVERAGE: exceptions occur i.i.d. at the
+    THEORETICAL rate p = 1 - confidence, regardless of clustering. Simulates
+    n_sims breach-indicator series of length n, i.i.d. Bernoulli(p), computes
+    the SAME LR statistic (`_kupiec_lr_stat`) on each, and returns the
+    (r+1)/(N+1)-corrected proportion of simulated statistics >= the observed
+    one. Exact by construction: unlike the chi-squared asymptotic p-value, it
+    does not rely on a large-sample approximation, which is unreliable when
+    the exception count is small -- often single digits for a 99% VaR over a
+    ~2-year/250-day window.
+    """
+    rng = np.random.default_rng(seed)
+    exceptions_sim = rng.binomial(1, p, size=(n_sims, n)).sum(axis=1)
+    lr_sims = np.array([_kupiec_lr_stat(int(e), n, p) for e in exceptions_sim])
+    r = int(np.sum(lr_sims >= lr_obs))
+    return (r + 1) / (n_sims + 1)
+
+
 def kupiec_backtest(pnl: np.ndarray, var_series: np.ndarray,
-                    confidence: float = 0.99) -> KupiecResult:
+                    confidence: float = 0.99, n_sims: int = 10_000,
+                    seed: int = 12345) -> KupiecResult:
     """
     Kupiec proportion-of-failures (POF) test.
 
     Counts how often the realised loss exceeded the VaR and tests whether that
-    frequency is statistically consistent with (1 - confidence). A model that is
-    not rejected (p_value above 5%) is considered adequate.
+    frequency is statistically consistent with (1 - confidence). Reports both
+    the classical asymptotic (chi-squared) p-value and an exact Monte Carlo
+    p-value (see `_kupiec_mc_pvalue`); `passed` is decided on the Monte Carlo
+    one. See KupiecResult and NOTES.md for the applicability conditions of
+    this test.
 
     pnl:        realised P&L per period (losses negative).
     var_series: the VaR (positive loss magnitude) for each period.
+    n_sims:     Monte Carlo draws for the exact p-value (default 10,000).
+    seed:       fixed seed, for reproducibility.
     """
     pnl = np.asarray(pnl, dtype=float)
     var_series = np.asarray(var_series, dtype=float)
@@ -216,28 +292,22 @@ def kupiec_backtest(pnl: np.ndarray, var_series: np.ndarray,
     expected = n * p
     pi = exceptions / n if n > 0 else 0.0
 
-    # Likelihood-ratio statistic for the POF test.
-    if exceptions == 0:
-        lr = -2.0 * (n * np.log(1 - p))
-    elif exceptions == n:
-        lr = -2.0 * (n * np.log(p))
-    else:
-        lr = -2.0 * (
-            (n - exceptions) * np.log(1 - p) + exceptions * np.log(p)
-            - (n - exceptions) * np.log(1 - pi) - exceptions * np.log(pi)
-        )
+    lr = _kupiec_lr_stat(exceptions, n, p)
 
     from scipy.stats import chi2
     p_value = float(1.0 - chi2.cdf(lr, df=1))
+    p_value_mc = _kupiec_mc_pvalue(lr, n, p, n_sims=n_sims, seed=seed)
     return KupiecResult(
         observations=n, exceptions=exceptions, expected_exceptions=float(expected),
-        failure_rate=float(pi), lr_statistic=float(lr), p_value=p_value,
-        passed=bool(p_value > 0.05),
+        failure_rate=float(pi), lr_statistic=float(lr),
+        p_value=p_value, p_value_mc=p_value_mc,
+        passed=bool(p_value_mc > 0.05),
     )
 
 
 def rolling_backtest(returns: np.ndarray, positions: np.ndarray,
-                     confidence: float = 0.99, window: int = 250) -> KupiecResult:
+                     confidence: float = 0.99, window: int = 250,
+                     n_sims: int = 10_000, seed: int = 12345) -> KupiecResult:
     """
     Proper rolling (out-of-sample) backtest of the historical VaR.
 
@@ -245,11 +315,21 @@ def rolling_backtest(returns: np.ndarray, positions: np.ndarray,
     day from a trailing window and tests it against the NEXT day's realised P&L
     -- exactly how a VaR model is validated in production. For each day t beyond
     the initial window, the VaR is computed from days [t-window, t) and compared
-    to the P&L on day t. The exception count then feeds the same Kupiec POF test.
+    to the P&L on day t. The exception count then feeds the same Kupiec POF test
+    (asymptotic AND Monte Carlo p-values, see `kupiec_backtest`).
+
+    Estimation-risk caveat (declared, not corrected): this backtest treats
+    each day's rolling VaR as if it were the TRUE model, but it is itself
+    estimated from a finite trailing window. Standard Kupiec/MC backtests do
+    not correct for that extra estimation uncertainty, so a 'pass' here is
+    evidence the ESTIMATED VaR process performed adequately out-of-sample, not
+    a guarantee about the underlying true model.
 
     returns:   (n_days, n_factors) historical returns.
     positions: (n_factors,) exposures.
     window:    trailing window length used to estimate each day's VaR (e.g. 250).
+    n_sims:    Monte Carlo draws for the exact p-value (default 10,000).
+    seed:      fixed seed, for reproducibility.
     """
     returns = np.asarray(returns, dtype=float)
     if returns.ndim == 1:
@@ -268,25 +348,21 @@ def rolling_backtest(returns: np.ndarray, positions: np.ndarray,
             exceptions += 1
         tested += 1
 
-    # Kupiec POF test on the out-of-sample exceptions.
+    # Kupiec POF test on the out-of-sample exceptions (same code path as
+    # kupiec_backtest: _kupiec_lr_stat / _kupiec_mc_pvalue).
     p = 1.0 - confidence
     expected = tested * p
     pi = exceptions / tested if tested > 0 else 0.0
-    if exceptions == 0:
-        lr = -2.0 * (tested * np.log(1 - p))
-    elif exceptions == tested:
-        lr = -2.0 * (tested * np.log(p))
-    else:
-        lr = -2.0 * (
-            (tested - exceptions) * np.log(1 - p) + exceptions * np.log(p)
-            - (tested - exceptions) * np.log(1 - pi) - exceptions * np.log(pi)
-        )
+    lr = _kupiec_lr_stat(exceptions, tested, p)
+
     from scipy.stats import chi2
     p_value = float(1.0 - chi2.cdf(lr, df=1))
+    p_value_mc = _kupiec_mc_pvalue(lr, tested, p, n_sims=n_sims, seed=seed)
     return KupiecResult(
         observations=tested, exceptions=exceptions, expected_exceptions=float(expected),
-        failure_rate=float(pi), lr_statistic=float(lr), p_value=p_value,
-        passed=bool(p_value > 0.05),
+        failure_rate=float(pi), lr_statistic=float(lr),
+        p_value=p_value, p_value_mc=p_value_mc,
+        passed=bool(p_value_mc > 0.05),
     )
 
 
@@ -410,7 +486,44 @@ def var_student_t(returns: np.ndarray, positions: np.ndarray,
     return max(var, 0.0)                                  # VaR is non-negative
 
 
-def christoffersen_independence(pnl: np.ndarray, var_series: np.ndarray
+def _safe_log(x: float) -> float:
+    return np.log(x) if x > 0 else 0.0
+
+
+def _christoffersen_lr_stat(hits: np.ndarray) -> tuple[float, float, float, float]:
+    """
+    Christoffersen independence likelihood-ratio statistic, computed from a
+    0/1 hit-indicator series (transition counts n00/n01/n10/n11 between
+    consecutive days, then LR of the conditional vs unconditional exception
+    model). Shared by the OBSERVED statistic and by Monte Carlo simulated
+    draws under the null (see `christoffersen_independence`), so both go
+    through the exact same formula.
+
+    Returns (lr, pi01, pi11, pi): the LR statistic and the three transition
+    probabilities (P(exception | no exception yesterday), P(exception |
+    exception yesterday), and the unconditional exception rate).
+    """
+    hits = np.asarray(hits)
+    prev, cur = hits[:-1], hits[1:]
+    n00 = int(np.sum((prev == 0) & (cur == 0)))
+    n01 = int(np.sum((prev == 0) & (cur == 1)))
+    n10 = int(np.sum((prev == 1) & (cur == 0)))
+    n11 = int(np.sum((prev == 1) & (cur == 1)))
+
+    pi01 = n01 / (n00 + n01) if (n00 + n01) > 0 else 0.0
+    pi11 = n11 / (n10 + n11) if (n10 + n11) > 0 else 0.0
+    total = n00 + n01 + n10 + n11
+    pi = (n01 + n11) / total if total > 0 else 0.0
+
+    ll_uncond = (n00 + n10) * _safe_log(1 - pi) + (n01 + n11) * _safe_log(pi)
+    ll_cond = (n00 * _safe_log(1 - pi01) + n01 * _safe_log(pi01)
+               + n10 * _safe_log(1 - pi11) + n11 * _safe_log(pi11))
+    lr = -2.0 * (ll_uncond - ll_cond)
+    return float(lr), pi01, pi11, pi
+
+
+def christoffersen_independence(pnl: np.ndarray, var_series: np.ndarray,
+                                n_sims: int = 10_000, seed: int = 12345
                                 ) -> dict[str, float]:
     """
     B5: Christoffersen test of INDEPENDENCE of VaR exceptions.
@@ -419,35 +532,42 @@ def christoffersen_independence(pnl: np.ndarray, var_series: np.ndarray
     CLUSTER (an exception today making one tomorrow more likely), which signals a
     model that does not react to changing risk. Tests the transition
     probabilities of the exception indicator with a likelihood-ratio statistic.
-    Returns the LR statistic, its p-value (chi-square, 1 df), and whether
-    independence is NOT rejected (p > 0.05 = good, no clustering).
+    Reports both the asymptotic (chi-squared) and an exact Monte Carlo
+    p-value; `independent` is decided on the Monte Carlo one.
+
+    Applicability (see NOTES.md): this is a FIRST-ORDER MARKOV test -- it only
+    checks whether an exception today predicts one tomorrow. It is blind to
+    higher-order or longer-range clustering (e.g. exceptions bunching within
+    a week without consecutive-day repeats). A "pass" rules out simple
+    day-to-day clustering, not every form of it.
+
+    Null-specification note (H1): the null here is ONLY that exceptions are
+    serially independent -- their RATE is unrestricted (it is not also being
+    tested against the theoretical VaR miss rate p; that is Kupiec's job).
+    The Monte Carlo simulation therefore draws i.i.d. Bernoulli at the
+    OBSERVED breach rate pi_hat, NOT at the theoretical p = 1 - confidence.
+    Simulating at p would silently test a different, joint (coverage +
+    independence) null and misstate this test's own p-value.
     """
     from scipy.stats import chi2
     pnl = np.asarray(pnl, dtype=float)
     var_series = np.asarray(var_series, dtype=float)
     hits = (-pnl > var_series).astype(int)              # 1 = exception
+    n = len(hits)
 
-    # Count transitions between consecutive days.
-    n00 = n01 = n10 = n11 = 0
-    for prev, cur in zip(hits[:-1], hits[1:]):
-        if prev == 0 and cur == 0: n00 += 1
-        elif prev == 0 and cur == 1: n01 += 1
-        elif prev == 1 and cur == 0: n10 += 1
-        else: n11 += 1
-
-    pi01 = n01 / (n00 + n01) if (n00 + n01) > 0 else 0.0
-    pi11 = n11 / (n10 + n11) if (n10 + n11) > 0 else 0.0
-    pi = (n01 + n11) / (n00 + n01 + n10 + n11)
-
-    # Likelihood ratio for independence.
-    def _safe_log(x): return np.log(x) if x > 0 else 0.0
-    ll_uncond = (n00 + n10) * _safe_log(1 - pi) + (n01 + n11) * _safe_log(pi)
-    ll_cond = (n00 * _safe_log(1 - pi01) + n01 * _safe_log(pi01)
-               + n10 * _safe_log(1 - pi11) + n11 * _safe_log(pi11))
-    lr = -2.0 * (ll_uncond - ll_cond)
+    lr, pi01, pi11, pi = _christoffersen_lr_stat(hits)
     p_value = float(1.0 - chi2.cdf(lr, df=1))
+
+    pi_hat = float(np.mean(hits)) if n > 0 else 0.0
+    rng = np.random.default_rng(seed)
+    sims = rng.binomial(1, pi_hat, size=(n_sims, n))
+    lr_sims = np.array([_christoffersen_lr_stat(row)[0] for row in sims])
+    r = int(np.sum(lr_sims >= lr))
+    p_value_mc = (r + 1) / (n_sims + 1)
+
     return {
-        "lr_statistic": float(lr), "p_value": p_value,
-        "independent": bool(p_value > 0.05),
+        "lr_statistic": float(lr), "p_value": p_value, "p_value_mc": p_value_mc,
+        "independent": bool(p_value_mc > 0.05),
+        "mc_agrees_with_asymptotic": (p_value > 0.05) == (p_value_mc > 0.05),
         "clustering_ratio_pi11_vs_pi01": float(pi11 / pi01) if pi01 > 0 else float("nan"),
     }

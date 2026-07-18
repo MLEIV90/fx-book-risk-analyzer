@@ -66,7 +66,9 @@ def value_position_from_snapshot(position: Position,
         strike=position.strike,
         fair_fwd_now=market_fwd,
         r_quote=snapshot.r_quote,
-        tau_remaining=snapshot.tenor_years,
+        # H2: discounted at r_quote, so tau_remaining must be the QUOTE
+        # currency's own day-count basis, not the base's.
+        tau_remaining=snapshot.tau_quote,
         long_base=position.long_base,
     )
     return PositionValuation(
@@ -131,6 +133,7 @@ def _shift_snapshot(snap: MarketSnapshot, shock_pct: float) -> MarketSnapshot:
         tenor_years=snap.tenor_years, spot=snap.spot * (1 + shock_pct / 100.0),
         r_base=snap.r_base, r_quote=snap.r_quote,
         vol_historical=snap.vol_historical, vol_garch=snap.vol_garch,
+        tenor_years_quote=snap.tenor_years_quote,
     )
 
 

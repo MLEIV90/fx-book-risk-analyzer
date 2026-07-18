@@ -106,7 +106,9 @@ def var_parametric(returns: np.ndarray, positions: np.ndarray,
 
     Assumes returns are jointly normal. Builds the portfolio standard deviation
     from the covariance matrix, then scales by the normal z-score.
-    Fast and smooth, but UNDERESTIMATES the tail when returns are fat-tailed.
+    Fast and smooth, but UNDERESTIMATES the tail when returns are fat-tailed --
+    FX returns empirically are, which is exactly why the Student-t and
+    historical methods are also reported side by side (see NOTES.md).
     """
     from scipy.stats import norm
 
@@ -127,6 +129,11 @@ def var_historical(returns: np.ndarray, positions: np.ndarray,
     """
     Historical VaR: no distribution assumption. Reprice the book on each
     historical scenario, then read the empirical percentile of the loss side.
+
+    Applicability (see NOTES.md): no distributional assumption, but validity
+    rests on the TRAILING WINDOW being representative of the risk horizon,
+    and the estimate is sensitive to WINDOW LENGTH (short = reactive but
+    noisy; long = smooth but stale).
     """
     pnl = _pnl_vector(returns, positions)
     # VaR is a non-negative loss magnitude. If the loss-side percentile is itself
@@ -148,6 +155,13 @@ def var_montecarlo(returns: np.ndarray, positions: np.ndarray,
     zero_drift (default True): for a 1-day VaR the historical mean return is
     statistical noise and biases the tail; standard practice sets the drift to
     zero. Set False only to study the effect of including the drift.
+
+    Applicability (see NOTES.md): assumes the FITTED data-generating process
+    (here, a multivariate normal on the sample covariance) is a good model of
+    returns -- with a normal engine it inherits the same fat-tail
+    understatement as the parametric VaR -- and carries simulation (sampling)
+    error from a finite number of draws; `var_montecarlo_stability` reports
+    that seed-to-seed error rather than assuming it away.
     """
     rng = np.random.default_rng(seed)
     returns = np.asarray(returns, dtype=float)
