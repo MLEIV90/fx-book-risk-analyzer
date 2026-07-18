@@ -12,6 +12,13 @@ the risk come from?" (attribution).
 Scope, declared: risk is measured on the forward positions' spot exposure (the
 delta of each forward to its pair).
 
+Numeraire: every pair's exposure is expressed in a single common numeraire
+(USD) before aggregating, so pairs that don't share a quote currency (e.g.
+EUR/USD and EUR/GBP together) can sit in the same VaR. Quote-USD pairs need no
+conversion; a non-USD-quoted pair is converted at the CURRENT spot of its
+quote currency against USD (e.g. EUR/GBP via GBP/USD) -- a declared quanto-
+style approximation, see `_factor_positions`.
+
 Pure functions where possible: VaR/ES/Kupiec/attribution take returns and
 positions as arrays and can be unit-tested without the network.
 """
@@ -74,31 +81,66 @@ class KupiecResult:
 
 def _factor_positions(book, spots: dict[str, float]) -> tuple[list[str], np.ndarray]:
     """
-    Map the book to per-pair spot exposures (quote-currency notionals).
+    Map the book to per-pair spot exposures, expressed in a single common
+    numeraire (USD), so the portfolio VaR can aggregate pairs that don't all
+    share the same quote currency (e.g. a book of EUR/USD, GBP/USD, EUR/GBP).
 
-    A forward long N base of a pair has spot exposure ~ N * spot in quote terms.
-    Positions on the same pair are netted. `spots` provides the current spot per
-    pair. Returns (ordered pairs, positions vector aligned to those pairs).
+    A forward long N base of a pair has spot exposure ~ N * spot, in the
+    pair's own QUOTE currency.
+
+    Fast path (unchanged from the quote-USD-only version): if a pair is
+    quote-USD, that exposure IS already in USD, and is used as-is -- no
+    conversion, no extra data needed.
+
+    Common-numeraire path: a pair quoted in a non-USD currency (e.g. EUR/GBP,
+    quote GBP) has its exposure -- naturally denominated in GBP -- converted
+    to USD by multiplying by the CURRENT spot of "{quote}/USD" (here GBP/USD).
+    `spots` must then also carry that conversion rate; in a book that already
+    holds the quote currency's own USD pair (e.g. GBP/USD, as in a book of
+    {EUR/USD, GBP/USD, EUR/GBP}), it comes for free from that position's own
+    spot. If it isn't available, the pair genuinely cannot be priced in USD
+    with the data at hand, and this fails loud rather than guessing --
+    supporting a quote currency with NO USD conversion available (e.g. a
+    EUR/JPY position with no JPY/USD spot) is still out of scope.
+
+    Quanto approximation (declared, not hidden): the USD conversion uses the
+    CURRENT "{quote}/USD" spot, held FIXED, rather than jointly modelling how
+    that conversion rate itself co-moves with the position's own P&L. E.g. for
+    EUR/GBP, this ignores the covariance between EUR/GBP and GBP/USD -- both
+    move into the one USD P&L number, but only through today's fixed GBP/USD
+    level, not their joint distribution. This is the standard quanto-style
+    simplification and is acceptable for a spot/delta VaR at this scope, but
+    it means the USD risk of a cross position is not a fully currency-hedged
+    number.
+
+    Positions on the same pair are netted. `spots` provides the current spot
+    for every pair in the book, plus "{ccy}/USD" for every non-USD quote
+    currency present. Returns (ordered pairs, USD positions vector aligned to
+    those pairs).
     """
-    # All pair exposures are summed in quote-currency terms into one covariance
-    # and one VaR. That is only valid when every pair shares the same quote
-    # currency (USD here). A non-USD-quoted pair (e.g. EUR/JPY) would mix P&L in
-    # different currencies without conversion, silently corrupting the VaR. We
-    # fail loudly rather than return a wrong number -- supporting mixed quote
-    # currencies would require converting each leg to a common numeraire first.
-    non_usd = sorted({p.pair for p in book if p.quote_ccy != "USD"})
-    if non_usd:
-        raise ValueError(
-            "Portfolio VaR currently assumes all pairs are quote-USD; found "
-            f"non-USD-quoted pair(s): {', '.join(non_usd)}. Converting each pair's "
-            "P&L to a common numeraire is out of scope in this version.")
-
-    exposure: dict[str, float] = {}
+    exposure_quote: dict[str, float] = {}
     for p in book:
         sign = 1.0 if p.long_base else -1.0
-        exposure[p.pair] = exposure.get(p.pair, 0.0) + sign * p.notional_base * spots[p.pair]
-    pairs = sorted(exposure.keys())
-    positions = np.array([exposure[pair] for pair in pairs])
+        exposure_quote[p.pair] = (exposure_quote.get(p.pair, 0.0)
+                                  + sign * p.notional_base * spots[p.pair])
+
+    pairs = sorted(exposure_quote.keys())
+    positions = np.empty(len(pairs))
+    for i, pair in enumerate(pairs):
+        quote_ccy = pair.split("/")[1]
+        exp = exposure_quote[pair]
+        if quote_ccy == "USD":
+            positions[i] = exp                            # fast path: already USD
+            continue
+        conv_pair = f"{quote_ccy}/USD"
+        if conv_pair not in spots:
+            raise ValueError(
+                f"Cannot express {pair}'s exposure in USD: no spot available "
+                f"for '{conv_pair}'. Portfolio VaR needs a USD conversion rate "
+                "for every non-USD quote currency in the book -- either the "
+                f"book also holds a {conv_pair} position (its spot is reused), "
+                "or that conversion rate must be supplied separately.")
+        positions[i] = exp * spots[conv_pair]             # common-numeraire path
     return pairs, positions
 
 

@@ -81,7 +81,7 @@ pytest -q
 
 The numbers are validated at two levels:
 
-- **91 automated tests** covering pricing, the five VaR methods, and sign and edge-case invariants — including **property-based tests** that check invariants (e.g. forward mark-to-market symmetry) over thousands of random inputs.
+- **96 automated tests** covering pricing, the five VaR methods, and sign and edge-case invariants — including **property-based tests** that check invariants (e.g. forward mark-to-market symmetry) over thousands of random inputs.
 - A **ten-layer audit** across correctness, robustness and experience: pricing verified against analytical references (put-call parity to machine precision; the three core VaRs within 1% of their analytical values), presentation logic checked so on-screen labels match what each number means, edge cases hardened (VaR floored at zero, stressed VaR floored at the normal VaR), and conventions unified (ACT/360 throughout).
 
 A full technical and user manual is included in the repository: **`FX_Book_Risk_Analyzer_Manual.docx`** — it documents every module, formula, screen and calculation in detail.
@@ -93,7 +93,7 @@ A full technical and user manual is included in the repository: **`FX_Book_Risk_
 This is an educational / demonstration tool, not investment advice.
 
 - **Spot VaR**, not rate VaR — interest-rate risk is reported separately as DV01, not combined into one number.
-- **USD-quoted pairs only** — the portfolio VaR sums exposures in USD; a non-USD-quoted pair fails loud rather than returning a wrong number.
+- **Common-numeraire VaR, quanto-approximated** — a non-USD-quoted cross (e.g. EUR/GBP) is converted to USD at the *current* USD spot of its quote currency before aggregating, not modelled jointly with that conversion rate; a pair with no USD conversion available still fails loud. This is an engine capability, not yet exposed in the booking screen (EUR/USD, GBP/USD only for now).
 - **Free, delayed data** — suitable for a reproducible demo; a production build would use a professional feed.
 - **Flat GBP curve** and a stress window taken from ~2 years of free history.
 - **No NDFs** (used for non-convertible emerging currencies, outside the EUR/GBP/USD scope) — investigated and deliberately left out, explained in the manual.

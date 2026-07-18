@@ -15,7 +15,6 @@ The engine (fxrisk/) stays pure and stateless; all caching/retry lives here.
 from __future__ import annotations
 
 import time
-import numpy as np
 
 from fxrisk.data import fetch_spot_history, to_returns, MarketDataError
 from fxrisk.market import get_market_snapshot
@@ -81,24 +80,17 @@ def factor_setup(book, snapshots: dict, history_period: str = "2y"):
     Build the inputs for portfolio VaR:
     - pairs: distinct pairs in the book (the risk factors), sorted.
     - returns: (n_days, n_pairs) real returns matrix aligned to pairs.
-    - positions: (n_pairs,) net spot exposure in quote currency per pair.
+    - positions: (n_pairs,) net exposure per pair, in a common USD numeraire
+      (see fxrisk.portfolio_risk._factor_positions for the conversion and its
+      declared quanto-style approximation for non-USD-quoted pairs).
     """
+    from fxrisk.portfolio_risk import _factor_positions
+
     pairs = book.pairs()
-
-    non_usd = sorted({p.pair for p in book if p.quote_ccy != "USD"})
-    if non_usd:
-        raise ValueError(
-            "Portfolio VaR currently assumes all pairs are quote-USD; found "
-            f"non-USD-quoted pair(s): {', '.join(non_usd)}.")
-
     prices = cached_spot_history(tuple(pairs), period=history_period)
     rets_df = to_returns(prices)
     returns = rets_df[pairs].to_numpy()
 
     spots = {p.pair: snapshots[p.id].spot for p in book}
-    exposure = {pr: 0.0 for pr in pairs}
-    for p in book:
-        sign = 1.0 if p.long_base else -1.0
-        exposure[p.pair] += sign * p.notional_base * spots[p.pair]
-    positions = np.array([exposure[pr] for pr in pairs])
+    _, positions = _factor_positions(book, spots)
     return pairs, returns, positions

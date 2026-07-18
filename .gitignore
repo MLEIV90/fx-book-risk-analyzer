@@ -6,4 +6,5 @@ venv/
 .vscode/
 .idea/
 ~$*.docx
+*.docx
 .streamlit/secrets.toml

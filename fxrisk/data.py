@@ -27,9 +27,50 @@ DEFAULT_TICKERS: dict[str, str] = {
     "GBP/USD": "GBPUSD=X",
 }
 
+# Crosses not directly ticked in this app's scope. Derived (not observed) by
+# triangulating two DIRECT, USD-quoted legs under the standard quote-per-base
+# identity:
+#   EUR/GBP (GBP per 1 EUR) = EUR/USD (USD per 1 EUR) / GBP/USD (USD per 1 GBP)
+# Both legs are real yfinance data; only the ratio is derived, so EUR/GBP
+# inherits both legs' data quality (and, downstream, the flat-GBP-curve
+# limitation when it is used to price a forward -- see fxrisk.market).
+TRIANGULATED_PAIRS: dict[str, tuple[str, str]] = {
+    "EUR/GBP": ("EUR/USD", "GBP/USD"),
+}
+
 
 class MarketDataError(RuntimeError):
     """Raised when live market data cannot be retrieved."""
+
+
+def _fetch_direct(tickers_pairs: list[str], period: str) -> pd.DataFrame:
+    """
+    Download daily close history for pairs with a direct yfinance ticker in
+    DEFAULT_TICKERS. Returns a DataFrame with one column per pair, labelled by
+    pair name. Internal building block of `fetch_spot_history`.
+    """
+    import yfinance as yf
+
+    tickers = [DEFAULT_TICKERS[p] for p in tickers_pairs]
+    close = yf.download(tickers, period=period, progress=False)["Close"]
+    if close is None or len(close) == 0:
+        raise MarketDataError("Live market data is currently unavailable.")
+
+    # yfinance returns a different shape for one ticker vs many:
+    # - many tickers -> DataFrame with one column per ticker
+    # - one ticker   -> a Series (or single-column frame) without our labels
+    # Normalise to a DataFrame whose columns are the requested pairs, in order.
+    if isinstance(close, pd.Series):
+        raw = close.to_frame()
+        raw.columns = tickers_pairs
+    elif len(tickers_pairs) == 1:
+        raw = close.iloc[:, [0]].copy()
+        raw.columns = tickers_pairs
+    else:
+        # Reorder columns to match the requested pair order, then relabel.
+        raw = close[tickers].copy()
+        raw.columns = tickers_pairs
+    return raw
 
 
 def fetch_spot_history(pairs: list[str] | None = None,
@@ -37,39 +78,44 @@ def fetch_spot_history(pairs: list[str] | None = None,
     """
     Download daily spot history for the given pairs.
 
-    Returns a DataFrame of closing prices, one column per pair.
-    Raises MarketDataError if the data cannot be retrieved -- the caller (the
-    app) is expected to catch it and show a clear "data unavailable" message,
-    NOT to fall back to synthetic data.
+    Two kinds of pair:
+    - Direct (DEFAULT_TICKERS): a real yfinance ticker, fetched as observed.
+    - Triangulated crosses (TRIANGULATED_PAIRS, e.g. EUR/GBP): derived by
+      dividing two directly-fetched USD legs. The cross series is DERIVED,
+      not directly observed, and inherits both legs' data quality.
+
+    Returns a DataFrame of prices, one column per requested pair, in the
+    requested order. Raises MarketDataError if the data cannot be retrieved
+    -- the caller (the app) is expected to catch it and show a clear "data
+    unavailable" message, NOT to fall back to synthetic data.
     """
     pairs = pairs or list(DEFAULT_TICKERS.keys())
+    unknown = [p for p in pairs if p not in DEFAULT_TICKERS and p not in TRIANGULATED_PAIRS]
+    if unknown:
+        raise MarketDataError(f"No data source configured for: {', '.join(unknown)}.")
+
+    direct_requested = [p for p in pairs if p in DEFAULT_TICKERS]
+    triangulated_requested = [p for p in pairs if p in TRIANGULATED_PAIRS]
+    # Every leg that must actually be downloaded: the direct pairs asked for,
+    # plus each triangulated pair's two USD legs (deduplicated, order-stable).
+    legs_needed = list(dict.fromkeys(
+        direct_requested
+        + [leg for p in triangulated_requested for leg in TRIANGULATED_PAIRS[p]]))
+
     try:
-        import yfinance as yf
+        raw = _fetch_direct(legs_needed, period)
 
-        tickers = [DEFAULT_TICKERS[p] for p in pairs]
-        close = yf.download(tickers, period=period, progress=False)["Close"]
-        if close is None or len(close) == 0:
+        out = pd.DataFrame(index=raw.index)
+        for p in direct_requested:
+            out[p] = raw[p]
+        for p in triangulated_requested:
+            base_leg, quote_leg = TRIANGULATED_PAIRS[p]
+            out[p] = raw[base_leg] / raw[quote_leg]
+
+        out = out[pairs].dropna()
+        if out.empty:
             raise MarketDataError("Live market data is currently unavailable.")
-
-        # yfinance returns a different shape for one ticker vs many:
-        # - many tickers -> DataFrame with one column per ticker
-        # - one ticker   -> a Series (or single-column frame) without our labels
-        # Normalise to a DataFrame whose columns are the requested pairs, in order.
-        if isinstance(close, pd.Series):
-            raw = close.to_frame()
-            raw.columns = pairs
-        elif len(pairs) == 1:
-            raw = close.iloc[:, [0]].copy()
-            raw.columns = pairs
-        else:
-            # Reorder columns to match the requested pair order, then relabel.
-            raw = close[tickers].copy()
-            raw.columns = pairs
-
-        raw = raw.dropna()
-        if raw.empty:
-            raise MarketDataError("Live market data is currently unavailable.")
-        return raw
+        return out
     except MarketDataError:
         raise
     except Exception as exc:  # network down, API change, bad ticker, etc.

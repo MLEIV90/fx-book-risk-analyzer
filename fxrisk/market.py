@@ -18,7 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from fxrisk.forwards import forward_rate, year_fraction
-from fxrisk.data import fetch_spot_history, to_returns
+from fxrisk.data import fetch_spot_history, to_returns, TRIANGULATED_PAIRS
 from fxrisk.curves import rate_for_tenor, supported_currencies
 from fxrisk.garch import historical_vol, fit_garch
 
@@ -64,10 +64,20 @@ def get_market_snapshot(pair: str, tenor_days: int,
     notes: list[str] = []
     sources: dict = {}
 
-    # 1. Spot + history (yfinance).
+    # 1. Spot + history (yfinance directly, or triangulated for a cross like
+    #    EUR/GBP -- see fxrisk.data.TRIANGULATED_PAIRS).
     prices = fetch_spot_history([pair], period=history_period)
     spot = float(prices[pair].iloc[-1])
-    sources["spot"] = "yfinance (latest close)"
+    if pair in TRIANGULATED_PAIRS:
+        leg_a, leg_b = TRIANGULATED_PAIRS[pair]
+        sources["spot"] = f"Triangulated: {leg_a} / {leg_b} (yfinance latest close)"
+        notes.append(
+            f"{pair} is not directly quoted here; its spot and history are "
+            f"DERIVED by triangulating {leg_a} and {leg_b} under CIP-consistent "
+            "quote-per-base convention, then the forward applies CIP on top of "
+            "that triangulated spot. It inherits both legs' data quality.")
+    else:
+        sources["spot"] = "yfinance (latest close)"
 
     # 2. Rates per currency from FRED, at this tenor.
     r_base, curve_b = rate_for_tenor(base_ccy, tenor_years)
