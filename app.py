@@ -499,6 +499,7 @@ with tab_book:
 # --------------------------------------------------------------------------
 report = snapshots = pairs = returns = positions = var_report = None
 vt = ve = notional_usd = None
+governing_var = governing_var_label = None
 compute_error = None
 if not book.is_empty:
     try:
@@ -514,6 +515,21 @@ if not book.is_empty:
                 ve = var_ewma(returns, positions, confidence)
             except Exception:
                 vt = ve = None
+
+            # Governing VaR (H-review): the number limits/status are checked
+            # against. Neither the plain historical nor the plain parametric
+            # figure is, on its own, the conservative choice -- so we use the
+            # MAX of historical and Student-t, the two fat-tail-aware methods.
+            # That is the standard prudent choice for limit monitoring, and it
+            # is the SAME number and SAME label used everywhere a limit or
+            # status check is shown (Control screen, check_limits calls),
+            # so the figure is never ambiguous between screens.
+            if vt is not None:
+                governing_var = max(var_report.var_historical, vt)
+                governing_var_label = "max(historical, Student-t)"
+            else:
+                governing_var = var_report.var_historical
+                governing_var_label = "historical (Student-t unavailable)"
     except MarketDataError:
         compute_error = ("Live market data is unavailable right now. The tool does not "
                          "show synthetic prices — please try again in a moment.")
@@ -810,8 +826,12 @@ with tab_risk:
         dcols[-1].metric("DV01 total", f"{dv_total:,.2f}",
                          help="Net across curves — small, because the two legs offset. "
                               "The real rate risk is in the differential.")
-        st.caption("Value change per 1bp move, per currency curve. The legs of a forward "
-                   "partly offset, so the rate risk lives in the differential between curves.")
+        st.caption(f"DV01 total ≈ {dv_total:,.2f} is NOT 'no rate risk' — it is near zero "
+                   f"because the forward's two legs largely offset under a PARALLEL move "
+                   f"of all curves together. The actual rate risk lives in the "
+                   f"DIFFERENTIAL between curves (the per-currency figures above) and in "
+                   f"the key-rate buckets below, where the curves are free to move "
+                   f"independently.")
 
         st.markdown("##### Key-rate DV01 (by tenor bucket)")
         kr = dv01_book_by_tenor(book, snapshots)
@@ -901,7 +921,8 @@ with tab_risk:
                                            stress_book as _stress,
                                            dv01_book_by_tenor as _krd)
             from fxrisk.book_analytics import value_position_from_snapshot
-            lim_for_export = check_limits(cfg, var_value=var_report.var_historical,
+            # Same governing VaR as the Control screen's limit check (see above).
+            lim_for_export = check_limits(cfg, var_value=governing_var,
                                           net_exposure=book.net_exposure_by_currency())
             _rows = []
             for p in book:
@@ -960,7 +981,7 @@ with tab_control:
         pass
     else:
         cfg = LimitsConfig(var_limit=var_limit or None, net_exposure_limit=exp_limit or None)
-        lim = check_limits(cfg, var_value=var_report.var_historical,
+        lim = check_limits(cfg, var_value=governing_var,
                            net_exposure=book.net_exposure_by_currency())
 
         # Traffic-light status.
@@ -993,19 +1014,29 @@ with tab_control:
             {"label": "Book value / MtM (USD)",
              "value": f"{report.total_mtm_usd:,.0f}",
              "sign": "pos" if report.total_mtm_usd >= 0 else "neg"},
-            {"label": f"VaR · 1-day ({confidence:.0%})",
-             "value": f"{var_report.var_historical:,.0f}", "kind": "accent"},
+            {"label": f"VaR · 1-day ({confidence:.0%}) · governing",
+             "value": f"{governing_var:,.0f}", "kind": "accent",
+             "sub": governing_var_label},
             {"label": "Expected Shortfall",
              "value": f"{var_report.expected_shortfall:,.0f}", "kind": "warn"},
         ])
+        _all_var_methods = [v for v in (var_report.var_parametric, var_report.var_historical,
+                                        var_report.var_montecarlo, vt, ve) if v is not None]
+        st.caption(
+            f"The governing VaR — used for this status and for the limit check below — "
+            f"is **{governing_var_label}**: the more conservative of the two fat-tail-"
+            f"aware methods (Riesgo shows all five side by side, currently spanning "
+            f"{min(_all_var_methods):,.0f} to {max(_all_var_methods):,.0f}). Taking the "
+            f"max of historical and Student-t is the standard prudent choice for limit "
+            f"monitoring — it doesn't pick whichever number is smallest.")
 
         st.divider()
         st.subheader("Limit control")
         if not var_limit and not exp_limit:
-            suggested_var = var_report.var_historical * 2
+            suggested_var = governing_var * 2
             st.caption(f"No limits set. Tip: a common starting VaR limit is about 2× the "
-                       f"current VaR (~{suggested_var:,.0f} USD). Set it in the sidebar to "
-                       f"see the green/red check here.")
+                       f"current governing VaR (~{suggested_var:,.0f} USD). Set it in the "
+                       f"sidebar to see the green/red check here.")
         for c in lim.checks:
             cls = "bad" if c.breached else ("warn" if c.utilisation >= 80 else "ok")
             st.markdown(
