@@ -62,6 +62,43 @@ def test_report_carries_data_flags():
     assert any("Flat curve" in f for f in report.data_flags)
 
 
+def test_build_report_converts_non_usd_quote_mtm_to_usd():
+    """
+    A EUR/GBP position's MtM (in GBP) must be converted to USD via the book's
+    own GBP/USD spot before summing -- not added directly as if it were USD
+    (the pre-H2/Phase-3B-era bug this test guards against).
+    """
+    eurusd_snap = _snap("EUR/USD", 1.10, 0.03, 0.045)
+    gbpusd_snap = _snap("GBP/USD", 1.30, 0.045, 0.045)
+    eurgbp_snap = _snap("EUR/GBP", 1.10 / 1.30, 0.03, 0.045)
+
+    p_eurusd = Position("EUR/USD", True, 1_000_000, 90, eurusd_snap.forward() - 0.01, id="a")
+    p_eurgbp = Position("EUR/GBP", True, 1_000_000, 90, eurgbp_snap.forward() - 0.01, id="b")
+    p_gbpusd = Position("GBP/USD", True, 1_000_000, 90, gbpusd_snap.forward(), id="c")
+    book = Book([p_eurusd, p_eurgbp, p_gbpusd])
+
+    val_eurusd = value_position_from_snapshot(p_eurusd, eurusd_snap)
+    val_eurgbp = value_position_from_snapshot(p_eurgbp, eurgbp_snap)
+    val_gbpusd = value_position_from_snapshot(p_gbpusd, gbpusd_snap)
+    report = build_report([val_eurusd, val_eurgbp, val_gbpusd], book)
+
+    naive_total = val_eurusd.mtm_quote + val_eurgbp.mtm_quote + val_gbpusd.mtm_quote
+    expected_total = (val_eurusd.mtm_quote + val_eurgbp.mtm_quote * gbpusd_snap.spot
+                      + val_gbpusd.mtm_quote)
+    assert abs(report.total_mtm_usd - expected_total) < 1e-6
+    assert abs(report.total_mtm_usd - naive_total) > 1e-6   # must differ from the bug
+
+
+def test_build_report_raises_when_conversion_spot_missing():
+    """A EUR/GBP-only book, with no GBP/USD spot anywhere, cannot be priced in
+    USD -- must fail loud rather than silently treat GBP as USD."""
+    import pytest
+    eurgbp_snap = _snap("EUR/GBP", 0.85, 0.03, 0.045)
+    pos = Position("EUR/GBP", True, 1_000_000, 90, eurgbp_snap.forward() - 0.01)
+    with pytest.raises(ValueError, match="GBP/USD"):
+        build_report([value_position_from_snapshot(pos, eurgbp_snap)], Book([pos]))
+
+
 def test_shift_snapshot_scales_spot_only():
     """_shift_snapshot must scale spot by the shock and leave rates/vols intact."""
     from fxrisk.book_analytics import _shift_snapshot

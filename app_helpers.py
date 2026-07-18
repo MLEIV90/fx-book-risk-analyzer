@@ -94,3 +94,27 @@ def factor_setup(book, snapshots: dict, history_period: str = "2y"):
     spots = {p.pair: snapshots[p.id].spot for p in book}
     _, positions = _factor_positions(book, spots)
     return pairs, returns, positions
+
+
+def book_notional_usd(book, snapshots: dict) -> float:
+    """
+    Total book notional (gross, absolute per position), in a common USD
+    numeraire -- same conversion approach as `factor_setup`/
+    `fxrisk.portfolio_risk._factor_positions`: a position's notional * spot
+    is already USD when quote-USD; otherwise converted via the current spot
+    of quote/USD (requires that pair's spot to also be in `snapshots`, e.g.
+    the book also holding that quote currency's own USD pair).
+    """
+    spots = {p.pair: snapshots[p.id].spot for p in book}
+    total = 0.0
+    for p in book:
+        amt = abs(p.notional_base) * spots[p.pair]
+        if p.quote_ccy != "USD":
+            conv_pair = f"{p.quote_ccy}/USD"
+            if conv_pair not in spots:
+                raise ValueError(
+                    f"Cannot express {p.pair}'s notional in USD: no spot "
+                    f"available for '{conv_pair}'.")
+            amt *= spots[conv_pair]
+        total += amt
+    return total

@@ -13,9 +13,12 @@ What it produces, for a risk committee:
 - Book sensitivity to a spot shock (the bridge to VaR, in plain terms).
 - Data-quality flags (each valuation carries its source notes).
 
-Common-currency note: the book MtM is summed in USD. Positions quoted in USD
-(e.g. EUR/USD, GBP/USD) sum directly. A non-USD-quoted pair would need a spot
-conversion -- declared and NOT implemented in v1.
+Common-numeraire note: the book MtM is summed in USD, via the same approach
+as fxrisk.portfolio_risk._factor_positions -- positions quoted in USD (e.g.
+EUR/USD, GBP/USD) sum directly; a non-USD-quoted position (e.g. EUR/GBP) is
+converted at the CURRENT spot of its quote currency against USD (e.g. via
+GBP/USD), a declared quanto-style approximation, requiring the book to also
+hold that quote currency's own USD pair. See `_mtm_usd`.
 """
 from __future__ import annotations
 
@@ -33,6 +36,7 @@ class PositionValuation:
     market_forward: float
     mtm_quote: float                 # MtM in the position's quote currency
     quote_ccy: str
+    spot: float                      # the position's own pair spot, at valuation
     notes: list[str] = field(default_factory=list)
 
 
@@ -76,24 +80,51 @@ def value_position_from_snapshot(position: Position,
         market_forward=market_fwd,
         mtm_quote=mtm,
         quote_ccy=position.quote_ccy,
+        spot=snapshot.spot,
         notes=list(snapshot.notes),
     )
+
+
+def _mtm_usd(mtm_quote: float, quote_ccy: str, spots: dict[str, float]) -> float:
+    """
+    Convert a QUOTE-currency MtM to a common USD numeraire -- the same
+    approach as fxrisk.portfolio_risk._factor_positions: already USD when
+    `quote_ccy` is USD; otherwise converted via the CURRENT spot of
+    `quote_ccy`/USD, a declared quanto-style approximation (ignores the
+    covariance between that conversion rate and the position's own P&L).
+    `spots` must carry that conversion rate (e.g. the book also holding that
+    quote currency's own USD pair, whose spot is reused); otherwise this
+    fails loud rather than summing mismatched currencies.
+    """
+    if quote_ccy == "USD":
+        return mtm_quote
+    conv_pair = f"{quote_ccy}/USD"
+    if conv_pair not in spots:
+        raise ValueError(
+            f"Cannot express a {quote_ccy}-quoted MtM in USD: no spot "
+            f"available for '{conv_pair}'. Add a {conv_pair} position to the "
+            "book, or value this pair separately.")
+    return mtm_quote * spots[conv_pair]
 
 
 def build_report(valuations: list[PositionValuation], book: Book) -> BookReport:
     """
     Pure assembly of the committee report from per-position valuations.
-    Assumes quote currencies sum in USD (declared simplification).
+    MtMs are converted to a common USD numeraire before aggregating -- see
+    `_mtm_usd` for the conversion and its declared approximation.
     """
-    total = sum(v.mtm_quote for v in valuations)
-    gains = sum(v.mtm_quote for v in valuations if v.mtm_quote > 0)
-    losses = sum(v.mtm_quote for v in valuations if v.mtm_quote < 0)
+    spots = {v.position.pair: v.spot for v in valuations}
+    mtm_usd = [_mtm_usd(v.mtm_quote, v.quote_ccy, spots) for v in valuations]
+
+    total = sum(mtm_usd)
+    gains = sum(m for m in mtm_usd if m > 0)
+    losses = sum(m for m in mtm_usd if m < 0)
 
     # Concentration: each position's share of gross MtM, descending.
-    gross = sum(abs(v.mtm_quote) for v in valuations) or 1.0
+    gross = sum(abs(m) for m in mtm_usd) or 1.0
     concentration = sorted(
-        [(v.position.id, v.mtm_quote, abs(v.mtm_quote) / gross * 100.0)
-         for v in valuations],
+        [(v.position.id, m, abs(m) / gross * 100.0)
+         for v, m in zip(valuations, mtm_usd)],
         key=lambda x: abs(x[1]), reverse=True,
     )
 
@@ -142,14 +173,17 @@ def book_sensitivity(book: Book, shocks_pct: tuple[float, ...] = (-5, -1, 1, 5)
     """
     Book MtM under spot shocks -- the bridge to VaR, in committee language.
     For each shock, re-fetch is avoided: we re-value using a shifted snapshot
-    built from one fetch per position. Returns {shock_pct: total_mtm_usd}.
+    built from one fetch per position. Returns {shock_pct: total_mtm_usd},
+    each total converted to a common USD numeraire (see `_mtm_usd`).
     """
     base_snaps = {p.id: get_market_snapshot(p.pair, p.tenor_days) for p in book}
     out: dict[float, float] = {}
     for shock in shocks_pct:
         total = 0.0
+        spots = {p.pair: base_snaps[p.id].spot * (1 + shock / 100.0) for p in book}
         for p in book:
             shifted = _shift_snapshot(base_snaps[p.id], shock)
-            total += value_position_from_snapshot(p, shifted).mtm_quote
+            val = value_position_from_snapshot(p, shifted)
+            total += _mtm_usd(val.mtm_quote, val.quote_ccy, spots)
         out[shock] = total
     return out
