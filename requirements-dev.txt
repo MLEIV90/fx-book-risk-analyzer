@@ -4,3 +4,6 @@
 pytest>=8.0
 hypothesis>=6.0
 openpyxl>=3.1
+# For running/authoring notebooks/ (analysis pieces, not part of the app).
+jupyter>=1.0
+ipykernel>=6.29

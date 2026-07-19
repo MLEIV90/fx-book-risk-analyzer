@@ -38,6 +38,12 @@ A direct consequence: because a provider is typically short the currencies its i
 
 ---
 
+## Analysis
+
+Alongside the tool: [`notebooks/01_tail_risk_evt.ipynb`](notebooks/01_tail_risk_evt.ipynb) is the project's analysis companion — a from-scratch study of tail risk on the example book using Extreme Value Theory (Peaks-Over-Threshold / GPD), reusing the `fxrisk` engine's own functions and backtested with its Kupiec/Christoffersen machinery, head-to-head against the five VaR methods already in the tool. Fully reproducible offline: the ~2-year price history is fetched once and cached to `notebooks/data/fx_history.csv`, committed alongside it.
+
+---
+
 ## Architecture
 
 Two layers that never mix:

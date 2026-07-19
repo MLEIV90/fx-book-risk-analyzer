@@ -8,3 +8,4 @@ venv/
 ~$*.docx
 *.docx
 .streamlit/secrets.toml
+.ipynb_checkpoints/
