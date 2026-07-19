@@ -369,19 +369,28 @@ with tab_book:
     st.caption("Load a sample book or clear it, or build an individual trade below.")
     cc1, cc2 = st.columns(2)
     if cc1.button("Load example", use_container_width=True,
-                  help="Load a 3-position sample book to explore the tool."):
+                  help="Load a 4-position sample book to explore the tool."):
         try:
             with st.spinner("Building example book at live rates..."):
                 example = Book()
-                for pr, side, notl, ten, spr in [
-                    ("EUR/USD", True, 2_000_000, 90, 18),
-                    ("EUR/USD", False, 1_200_000, 180, 22),
-                    ("GBP/USD", True, 800_000, 120, 25),
+                # A provider net LONG EUR and GBP (hedged exporter clients) --
+                # loses when EUR/GBP fall, which is exactly what happens in
+                # these three historical crises, so Riesgo's Stress screen has
+                # a real downside tail to show. Position 3 is a partial
+                # offset (realistic book, not a perfectly one-way position);
+                # position 4 is the EUR/GBP cross, exercising the
+                # common-numeraire/triangulation paths.
+                for pr, provider_long_base, notl, ten, spr in [
+                    ("EUR/USD", True, 3_000_000, 90, 18),
+                    ("GBP/USD", True, 2_000_000, 120, 25),
+                    ("EUR/USD", False, 1_000_000, 180, 22),
+                    ("EUR/GBP", True, 1_500_000, 60, 15),
                 ]:
                     s = get_market_snapshot(pr, ten)
-                    rate = client_rate_with_spread(s.forward(), spr, side)
-                    example.add(Position(pr, not side, float(notl), ten, float(rate),
-                                         label="Example"))
+                    client_buys_base = not provider_long_base
+                    rate = client_rate_with_spread(s.forward(), spr, client_buys_base)
+                    example.add(Position(pr, provider_long_base, float(notl), ten,
+                                         float(rate), label="Example"))
                 st.session_state.book = example
             st.rerun()
         except Exception as exc:
