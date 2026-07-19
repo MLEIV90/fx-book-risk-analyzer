@@ -344,9 +344,7 @@ if not PAIRS:
 
 with st.sidebar:
     st.header("Risk limits")
-    st.caption("Limits turn risk measurement into risk control. Leave 0 to ignore a "
-               "limit. A suggested value appears once the book is valued (in "
-               "**Control**).")
+    st.caption("Leave 0 to ignore a limit.")
     var_limit = st.number_input("VaR limit (USD)", value=0, step=50_000, format="%d",
                                 help=HELP["var_limit"])
     exp_limit = st.number_input("Net exposure limit per currency", value=0,
@@ -453,8 +451,7 @@ with tab_book:
 
         st.divider()
         st.subheader("Exposure by currency")
-        st.caption("Net = the amount of each currency the book is long (+) or short (−) "
-                   "after offsetting positions. This is what the desk actually carries.")
+        st.caption("Net = long (+) or short (−) after offsetting positions.")
         net = book.net_exposure_by_currency()
         gross = book.gross_exposure_by_currency()
         cols = st.columns(len(net))
@@ -474,8 +471,6 @@ with tab_book:
         fig_exp.update_xaxes(title_text="Net exposure (currency units)")
         st.plotly_chart(_plotly_layout(fig_exp, height=max(160, 60 * len(_ccys))),
                         use_container_width=True, config={"displayModeBar": False})
-        st.caption("Long (positive) and short (negative) are directions, not "
-                   "good or bad — this is simply the net FX position the desk carries.")
 
         st.divider()
         with st.expander("Client view — what each trade looked like to the client"):
@@ -559,8 +554,6 @@ with tab_val:
         pass
     else:
         st.subheader("Book valuation (Mark-to-Market)")
-        st.caption("What the book is worth today at current market rates, and where "
-                   "that value sits.")
         cards([
             {"label": "Total MtM (USD)", "value": f"{report.total_mtm_usd:,.0f}",
              "kind": "accent", "sign": "pos" if report.total_mtm_usd >= 0 else "neg"},
@@ -569,16 +562,9 @@ with tab_val:
             {"label": "Losses (USD)", "value": f"{report.losses_usd:,.0f}",
              "kind": "bad", "sign": "neg" if report.losses_usd < 0 else ""},
         ])
-        st.markdown(
-            f'<div class="interp">The book is worth <b>{report.total_mtm_usd:,.0f} USD</b> '
-            f'at current market. Gains and losses show the composition behind the net '
-            f'figure — a small net can hide large offsetting positions.</div>',
-            unsafe_allow_html=True)
         st.write("")
 
         st.markdown("##### Forward pricing detail")
-        st.caption("Strike vs the fair (theoretical) forward, in forward points, and "
-                   "the resulting MtM — per position, in its own quote currency.")
         id_to_num = _id_to_num()
         st.dataframe(
             [{"#": id_to_num.get(v.position.id, v.position.id),
@@ -591,8 +577,6 @@ with tab_val:
             hide_index=True, use_container_width=True)
 
         st.markdown("##### Rate curves used")
-        st.caption("The base/quote rate read from each currency's curve, at each "
-                   "pair's tenor — what drives the fair forward away from spot.")
         rate_rows = []
         seen_pairs = set()
         for v in report.valuations:
@@ -609,16 +593,12 @@ with tab_val:
         st.dataframe(rate_rows, hide_index=True, use_container_width=True)
 
         st.markdown("##### Concentration (share of gross MtM)")
-        st.caption("How much of the book's value sits in each position. A high share in "
-                   "one row means the book leans heavily on a single trade.")
         st.dataframe(
             [{"#": id_to_num.get(pid, pid), "MtM (USD)": f"{mtm:,.0f}",
               "Share": f"{share:.1f}%"} for pid, mtm, share in report.concentration],
             hide_index=True, use_container_width=True)
 
         st.markdown("##### Sensitivity to a spot shock")
-        st.caption("How the book's value changes if every spot rate moves by the shown "
-                   "amount — a quick feel for directional risk before the formal VaR.")
         sens = book_sensitivity(book)
         scols = st.columns(len(sens))
         for col, (shock, mtm) in zip(scols, sorted(sens.items())):
@@ -638,18 +618,24 @@ with tab_risk:
         cfg = LimitsConfig(var_limit=var_limit or None, net_exposure_limit=exp_limit or None)
 
         st.subheader("Risk")
-        st.caption("Everything the book could lose, whether the model is trustworthy, "
-                   "its interest-rate and liquidity sensitivity, and how it behaves in "
-                   "a historical crisis — all on one screen.")
 
         # ==================== (a) VaR & Expected Shortfall ====================
         st.markdown("### VaR & Expected Shortfall")
+
+        # Governing VaR gets the emphasized slot -- this is the number that
+        # actually drives the limit check on Control, not just one of five.
+        if governing_var is not None:
+            cards([
+                {"label": "VaR · GOVERNING", "value": f"{governing_var:,.0f}",
+                 "sub": f"{governing_var_label} · drives the limit check (Control)",
+                 "kind": "accent"},
+            ])
+
         cards([
             {"label": "VaR · parametric", "value": f"{var_report.var_parametric:,.0f}",
              "sub": f"{var_report.var_parametric / book_notional:.2%} of book"},
             {"label": "VaR · historical", "value": f"{var_report.var_historical:,.0f}",
-             "sub": f"{var_report.var_historical / book_notional:.2%} of book",
-             "kind": "accent"},
+             "sub": f"{var_report.var_historical / book_notional:.2%} of book"},
             {"label": "VaR · Monte Carlo", "value": f"{var_report.var_montecarlo:,.0f}",
              "sub": f"{var_report.var_montecarlo / book_notional:.2%} of book"},
             {"label": "Expected Shortfall", "value": f"{var_report.expected_shortfall:,.0f}",
@@ -659,14 +645,10 @@ with tab_risk:
 
         if vt is not None and ve is not None:
             cards([
-                {"label": "VaR · Student-t", "value": f"{vt:,.0f}",
-                 "sub": "fat-tailed", "kind": "accent"},
+                {"label": "VaR · Student-t", "value": f"{vt:,.0f}", "sub": "fat-tailed"},
                 {"label": "VaR · EWMA", "value": f"{ve:,.0f}",
                  "sub": "regime-weighted (λ=0.94)"},
             ])
-            st.caption("Student-t captures fat tails the normal VaR misses; EWMA weights "
-                       "recent days more, so it reacts faster to the current regime. Both "
-                       "are validation-grade refinements over the plain normal VaR.")
 
             st.markdown("##### VaR methods compared")
             methods = {
@@ -678,7 +660,8 @@ with tab_risk:
             }
             order = sorted(methods, key=methods.get)
             vals = [methods[m] for m in order]
-            colors = [PLOT_ACCENT if m == "Student-t" else PLOT_MUTED for m in order]
+            colors = [PLOT_ACCENT if abs(methods[m] - governing_var) < 1e-6 else PLOT_MUTED
+                     for m in order]
             fig_cmp = go.Figure(go.Bar(
                 x=vals, y=order, orientation="h", marker_color=colors,
                 text=[f"{v:,.0f}" for v in vals], textposition="auto",
@@ -687,22 +670,10 @@ with tab_risk:
             st.plotly_chart(_plotly_layout(fig_cmp, height=260),
                             use_container_width=True, config={"displayModeBar": False})
             spread = (max(vals) - min(vals)) / min(vals) if min(vals) > 0 else 0
-            _highest = order[-1]
-            st.markdown(
-                f'<div class="interp">The five methods span <b>{min(vals):,.0f}</b> to '
-                f'<b>{max(vals):,.0f}</b> USD ({spread:.0%} apart), with <b>{_highest}</b> '
-                f'the most conservative on this book. They disagree by '
-                f'design: <b>Parametric</b> assumes a normal distribution; '
-                f'<b>Historical</b> makes no distributional assumption; <b>Monte Carlo</b> '
-                f'simulates from the covariance; <b>EWMA</b> weights recent days more, so '
-                f'it tracks the current regime; <b>Student-t</b> models fat tails and tends '
-                f'to be among the most conservative. A wide spread signals fat tails or a '
-                f'shifting regime — the normal VaR alone would understate the risk.</div>',
-                unsafe_allow_html=True)
+            st.caption(f"Methods span {min(vals):,.0f} to {max(vals):,.0f} USD "
+                      f"({spread:.0%} apart) · {governing_var_label} (highlighted) "
+                      f"governs the limit.")
 
-        st.caption(f"1-day horizon at {confidence:.1%} confidence. Book notional ≈ "
-                   f"{book_notional:,.0f} USD. The methods should broadly agree; "
-                   f"differences reveal how fat-tailed the data is.")
         st.markdown(
             '<div class="interp"><b>Scope:</b> this is a <b>spot VaR</b> — it measures '
             'exchange-rate risk only. Interest-rate risk is reported separately as DV01 '
@@ -714,13 +685,9 @@ with tab_risk:
         h1.metric("VaR historical · 10-day", f"{var_report.var_historical_10d:,.0f}",
                   help="1-day VaR scaled by √10 (Basel square-root-of-time rule).")
         h2.metric("Expected Shortfall · 10-day", f"{var_report.expected_shortfall_10d:,.0f}")
-        st.caption("Basel requires a 10-day horizon (the assumed time to unwind positions "
-                   "under stress). Scaled by √10, which assumes i.i.d. returns — a declared "
-                   "convention.")
+        st.caption("Scaled by √10 (Basel), which assumes i.i.d. returns.")
 
         st.markdown("##### P&L distribution")
-        st.caption("Each bar is a day's simulated profit/loss. The lines mark the VaR "
-                   "and ES — losses to their left are the bad tail.")
         pnl = returns @ positions
         fig = go.Figure()
         fig.add_trace(go.Histogram(x=pnl, nbinsx=50, marker_color=PLOT_ACCENT,
@@ -737,8 +704,6 @@ with tab_risk:
                         config={"displayModeBar": False})
 
         st.markdown("##### Risk contribution by factor")
-        st.caption("How much of the total risk each currency pair is responsible for. "
-                   "This is where the risk comes from.")
         rc = var_report.risk_contribution
         fig2 = go.Figure(go.Bar(
             x=list(rc.values()), y=list(rc.keys()), orientation="h",
@@ -753,8 +718,6 @@ with tab_risk:
 
         if len(pairs) > 1:
             st.markdown("##### Correlation between factors")
-            st.caption("How closely the pairs move together. High correlation means little "
-                       "diversification — which explains the benefit figure above.")
             corr = np.corrcoef(returns, rowvar=False)
             st.dataframe(
                 {pairs[j]: {pairs[i]: round(float(corr[i, j]), 2)
@@ -765,9 +728,6 @@ with tab_risk:
 
         # ==================== (b) Backtesting ====================
         st.markdown("### Backtesting")
-        st.caption("The proper validation: the VaR is re-estimated each day from a trailing "
-                   "window and tested against the NEXT day's loss — how a model is checked "
-                   "in production, not with a constant VaR.")
         try:
             kup = rolling_backtest(returns, positions, confidence, window=250)
             method_note = "Rolling 250-day window, re-estimated daily. "
@@ -816,8 +776,6 @@ with tab_risk:
 
         # ==================== (c) DV01 & liquidity ====================
         st.markdown("### DV01 & liquidity")
-        st.caption("Sensitivity to interest rates, and the cash the book may tie up as "
-                   "variation margin.")
         dv_by_ccy, dv_total = dv01_book(book, snapshots)
         st.markdown("##### Interest-rate risk (DV01 by curve)")
         dcols = st.columns(len(dv_by_ccy) + 1)
@@ -826,42 +784,28 @@ with tab_risk:
         dcols[-1].metric("DV01 total", f"{dv_total:,.2f}",
                          help="Net across curves — small, because the two legs offset. "
                               "The real rate risk is in the differential.")
-        st.caption(f"DV01 total ≈ {dv_total:,.2f} is NOT 'no rate risk' — it is near zero "
-                   f"because the forward's two legs largely offset under a PARALLEL move "
-                   f"of all curves together. The actual rate risk lives in the "
-                   f"DIFFERENTIAL between curves (the per-currency figures above) and in "
-                   f"the key-rate buckets below, where the curves are free to move "
-                   f"independently.")
+        st.caption(f"DV01 total ≈ {dv_total:,.2f} is NOT 'no rate risk' — the legs offset "
+                   f"under a PARALLEL move. The real risk is in the per-currency "
+                   f"DIFFERENTIAL above and the key-rate buckets below.")
 
         st.markdown("##### Key-rate DV01 (by tenor bucket)")
         kr = dv01_book_by_tenor(book, snapshots)
         kcols = st.columns(len(kr))
         for col, (bucket, dv) in zip(kcols, kr.items()):
             col.metric(f"DV01 {bucket}", f"{dv:,.2f}")
-        st.caption("Where on the curve the rate risk sits. A single parallel-bump DV01 "
-                   "hides this; bucketing by tenor shows what to hedge and with which "
-                   "instruments.")
 
         st.markdown("##### Liquidity (variation margin)")
         liq = liquidity_book(book, snapshots, confidence, returns=returns, positions=positions)
         st.metric("Liquidity buffer (USD)", f"{liq:,.0f}", help=HELP["liq"])
-        st.markdown(
-            '<div class="interp">A book hedged in profit-and-loss can still need cash, '
-            'because the bank charges margin daily while the client settles only at '
-            'maturity. This is the buffer Treasury should keep available. '
-            '<i>(Based on the book\'s real aggregate P&L volatility, scaled over the '
-            'margin horizon.)</i></div>', unsafe_allow_html=True)
+        st.caption("Based on the book's real aggregate P&L volatility, scaled over the "
+                   "margin horizon.")
 
         st.divider()
 
         # ==================== (d) Stress ====================
         st.markdown("### Stress")
-        st.caption("Historical crisis scenarios applied to today's book, and the VaR "
-                   "recalibrated to the worst observed period.")
         st.markdown("##### Historical stress scenarios")
-        st.caption("Each row applies the real market moves of a past crisis to today's "
-                   "book. A positive P&L is a gain, a negative one a loss. 'Loss × VaR' "
-                   "shows, for a loss, how many times a normal-day VaR it is.")
+        st.caption("'Loss × VaR' = how many times a normal-day VaR the loss is.")
         stress = stress_book(book, snapshots, var_report.var_historical)
         st.dataframe(
             [{"Scenario": name,
@@ -890,9 +834,6 @@ with tab_risk:
                 f'here.</div>', unsafe_allow_html=True)
 
         st.markdown("##### Stressed VaR (worst rolling window)")
-        st.caption("The VaR recalibrated to the most volatile period in the available "
-                   "history — 'how much would we lose if markets behaved like their worst "
-                   "observed regime', as Basel requires.")
         try:
             sv = stressed_var(returns, positions, confidence)
             sv1, sv2, sv3 = st.columns(3)
@@ -1020,15 +961,9 @@ with tab_control:
             {"label": "Expected Shortfall",
              "value": f"{var_report.expected_shortfall:,.0f}", "kind": "warn"},
         ])
-        _all_var_methods = [v for v in (var_report.var_parametric, var_report.var_historical,
-                                        var_report.var_montecarlo, vt, ve) if v is not None]
-        st.caption(
-            f"The governing VaR — used for this status and for the limit check below — "
-            f"is **{governing_var_label}**: the more conservative of the two fat-tail-"
-            f"aware methods (Riesgo shows all five side by side, currently spanning "
-            f"{min(_all_var_methods):,.0f} to {max(_all_var_methods):,.0f}). Taking the "
-            f"max of historical and Student-t is the standard prudent choice for limit "
-            f"monitoring — it doesn't pick whichever number is smallest.")
+        st.caption(f"Governing VaR = **{governing_var_label}** — the more conservative "
+                  f"of the two fat-tail-aware methods, and the one checked against the "
+                  f"limit below (Riesgo shows all five side by side).")
 
         st.divider()
         st.subheader("Limit control")
